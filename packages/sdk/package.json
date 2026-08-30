@@ -1,0 +1,8 @@
+{
+  "name": "@dynamify/personalization-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Dynamify personalization engine — pure, DB-free, framework-free. (VisitorContext, PageDefinition) => ResolvedPage.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

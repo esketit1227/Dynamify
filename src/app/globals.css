@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3f1ee;
+  --foreground: #17171a;
+  --surface: #ffffff;
+  --border: #e7e4e0;
+  --muted: #6f6e6a;
+  --accent: #17171a;
+  --accent-foreground: #ffffff;
+  --danger: #b3261e;
+  --focus-ring: #17171a;
+
+  /* Data-only colors (dataviz skill: color speaks for data, never chrome).
+     Validated with scripts/validate_palette.js — see docs/decisions.md. */
+  --chart-bar: #8cc63f;
+  --chart-bar-strong: #3b6b1f;
+  --status-positive: #1f9d55;
+  --categorical-1: #4c6fff;
+  --categorical-2: #f2994a;
+  --hero-gradient: linear-gradient(160deg, #14131b 0%, #2b283a 55%, #46435c 100%);
+  --hero-foreground: #ffffff;
+  --hero-muted: rgba(255, 255, 255, 0.68);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-danger: var(--danger);
+  --color-chart-bar: var(--chart-bar);
+  --color-chart-bar-strong: var(--chart-bar-strong);
+  --color-status-positive: var(--status-positive);
+  --color-categorical-1: var(--categorical-1);
+  --color-categorical-2: var(--categorical-2);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #111113;
+    --foreground: #f3f3f1;
+    --surface: #18181b;
+    --border: #2a2a2e;
+    --muted: #97979c;
+    --accent: #f3f3f1;
+    --accent-foreground: #17171a;
+    --danger: #e5645b;
+    --focus-ring: #f3f3f1;
+
+    --chart-bar: #66a02e;
+    --chart-bar-strong: #436b26;
+    --status-positive: #2fa85c;
+    --categorical-1: #6c87ff;
+    --categorical-2: #c9762e;
+    --hero-gradient: linear-gradient(160deg, #0a0a0d 0%, #201e2c 55%, #34324a 100%);
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

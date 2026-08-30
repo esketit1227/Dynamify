@@ -1,0 +1,1146 @@
+// Phase 0 core model — see docs/roadmap.md for scope, docs/decisions.md for
+// open questions this schema deliberately doesn't resolve (see D5, D6).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Identity & tenancy
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships         Membership[]
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // docs/visitor-data.md Retention: "our defaults as the maximum, not
+  // the minimum" — enforced by the same opportunistic cleanup-on-write
+  // pattern already established for RateLimitBucket
+  // (src/lib/auth/rateLimit.ts), applied per-org against these windows
+  // rather than one global constant, since no cron scheduler exists in
+  // this app.
+  rawEventRetentionDays Int @default(395)
+  sessionRetentionDays  Int @default(90)
+  visitorRetentionDays  Int @default(730)
+
+  memberships          Membership[]
+  projects             Project[]
+  pages                Page[]
+  audiences            Audience[]
+  campaigns            Campaign[]
+  aiProposals          AiProposal[]
+  domains              Domain[]
+  webhookSubscriptions WebhookSubscription[]
+  sites                Site[]
+  platformConnections  PlatformConnection[]
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role     @default(OWNER)
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Projects & pages
+// ---------------------------------------------------------------------------
+
+model Project {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pages        Page[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Page {
+  id                 String     @id @default(cuid())
+  organizationId     String
+  projectId          String
+  name               String
+  // Globally unique: Phase 2 publishes to `{slug}.yourdomain.app`, so this is
+  // a platform-wide namespace, not scoped per organization.
+  slug               String     @unique
+  status             PageStatus @default(DRAFT)
+  // The currently published version, if any (D6). Publishing writes this and
+  // PageVersion.compiledContent in one transaction — an atomic swap. SetNull
+  // rather than Cascade/Restrict: deleting the published version un-publishes
+  // the page instead of failing or cascading into deleting the page itself.
+  publishedVersionId String?    @unique
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  organization     Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions         PageVersion[] @relation("PageVersions")
+  publishedVersion PageVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  campaigns        Campaign[]
+
+  @@index([organizationId])
+  @@index([projectId])
+}
+
+model PageVersion {
+  id              String    @id @default(cuid())
+  organizationId  String
+  pageId          String
+  versionNumber   Int
+  // D6: rows (Component/ComponentVariant/PersonalizationRule) are the source
+  // of truth for editing; this is the compiled PageDefinition snapshot
+  // written once at publish time, and what the public page route reads.
+  compiledContent Json?
+  publishedAt     DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  page             Page        @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
+  publishedForPage Page?       @relation("PublishedVersion")
+  components       Component[]
+
+  @@unique([pageId, versionNumber])
+  @@index([organizationId])
+  @@index([pageId])
+}
+
+// ---------------------------------------------------------------------------
+// Components & personalization (Phase 1/2 consume these; rows now, per D6)
+// ---------------------------------------------------------------------------
+
+enum ComponentType {
+  HERO
+  TEXT
+  IMAGE
+  CTA
+  FEATURES
+  TESTIMONIALS
+  LOGOS
+  PRICING
+  FAQ
+  FORM
+}
+
+model Component {
+  id             String        @id @default(cuid())
+  organizationId String
+  pageVersionId  String
+  type           ComponentType
+  order          Int
+  // Required: every personalizable element must have a default (CLAUDE.md).
+  defaultContent Json
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  pageVersion          PageVersion           @relation(fields: [pageVersionId], references: [id], onDelete: Cascade)
+  variants             ComponentVariant[]
+  personalizationRules PersonalizationRule[]
+
+  @@index([organizationId])
+  @@index([pageVersionId])
+}
+
+model ComponentVariant {
+  id             String   @id @default(cuid())
+  organizationId String
+  componentId    String
+  name           String?
+  content        Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  component            Component             @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  personalizationRules PersonalizationRule[]
+
+  @@index([organizationId])
+  @@index([componentId])
+}
+
+model Audience {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rules                       AudienceRule[]
+  personalizationRules        PersonalizationRule[]
+  campaigns                   Campaign[]
+  elementPersonalizationRules ElementPersonalizationRule[]
+  generatedExperiences        GeneratedExperience[]
+
+  @@index([organizationId])
+}
+
+enum RuleOperator {
+  EQUALS
+  NOT_EQUALS
+  CONTAINS
+  IN
+  GREATER_THAN
+  LESS_THAN
+  EXISTS
+}
+
+model AudienceRule {
+  id             String       @id @default(cuid())
+  organizationId String
+  audienceId     String
+  field          String
+  operator       RuleOperator
+  value          Json
+  // Rules sharing a groupIndex are ANDed; groups are ORed (disjunctive normal
+  // form). A pragmatic stand-in for arbitrary nesting until Phase 1 defines
+  // what nesting actually needs to express — see docs/decisions.md.
+  groupIndex     Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  audience Audience @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([audienceId])
+}
+
+model PersonalizationRule {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  componentId        String
+  audienceId         String
+  componentVariantId String
+  // Explicit priority for the fixed resolution order: priority → specificity
+  // → default (CLAUDE.md; specificity itself is computed at resolve-time in
+  // Phase 1, not stored here — see docs/decisions.md D5).
+  priority           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  component        Component        @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  audience         Audience         @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  componentVariant ComponentVariant @relation(fields: [componentVariantId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([componentId])
+  @@index([audienceId])
+}
+
+// ---------------------------------------------------------------------------
+// Visitor tracking & analytics (Phase 3)
+// ---------------------------------------------------------------------------
+
+// Anonymous, cookie-keyed, no PII — see docs/decisions.md D4. Not linked to
+// the authenticated User/Session model at all.
+model Visitor {
+  id             String   @id @default(cuid())
+  organizationId String
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+enum EventType {
+  PAGE_VIEW
+  PERSONALIZATION_IMPRESSION
+  CTA_CLICK
+  FORM_START
+  FORM_SUBMIT
+  CONVERSION
+}
+
+// One table, not a separate Conversion model — conversion is just an event
+// type, per roadmap.md's own event list.
+model Event {
+  id                 String    @id @default(cuid())
+  organizationId     String
+  pageId             String
+  pageVersionId      String?
+  visitorId          String
+  campaignId         String?
+  type               EventType
+  componentId        String?
+  componentVariantId String?
+  // Small, bounded, validated at the collection boundary — never a place to
+  // stash arbitrary payloads.
+  metadata           Json?
+  createdAt          DateTime  @default(now())
+
+  @@index([organizationId])
+  @@index([pageId])
+  @@index([pageId, type])
+  @@index([visitorId])
+  @@index([campaignId])
+}
+
+// ---------------------------------------------------------------------------
+// Campaigns & A/B testing (Phase 4)
+// ---------------------------------------------------------------------------
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String
+  pageId         String
+  audienceId     String?
+  trafficSource  String?
+  goalEventType  EventType
+  // Simple 50/50 split — no statistical engine yet, per roadmap.md.
+  splitPercent   Int            @default(50)
+  status         CampaignStatus @default(DRAFT)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  page         Page                 @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  audience     Audience?            @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  assignments  CampaignAssignment[]
+
+  @@index([organizationId])
+  @@index([pageId])
+  @@index([audienceId])
+}
+
+enum CampaignVariantAssignment {
+  DEFAULT
+  VARIANT
+}
+
+// Sticky per-visitor 50/50 assignment — a visitor sees the same arm on
+// every visit, assigned once on first exposure to the campaign.
+model CampaignAssignment {
+  id             String                    @id @default(cuid())
+  organizationId String
+  campaignId     String
+  visitorId      String
+  variant        CampaignVariantAssignment
+  assignedAt     DateTime                  @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, visitorId])
+  @@index([organizationId])
+  @@index([visitorId])
+}
+
+// ---------------------------------------------------------------------------
+// AI (Phase 5) — proposals only; nothing here ever writes to Audience /
+// ComponentVariant directly. Approval is a separate, explicit action.
+// ---------------------------------------------------------------------------
+
+enum AiProposalKind {
+  AUDIENCE
+  COPY
+  VARIANT
+}
+
+enum AiProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model AiProposal {
+  id              String           @id @default(cuid())
+  organizationId  String
+  kind            AiProposalKind
+  // The user's free-form request — untrusted input, never treated as an
+  // instruction to anything but the model call itself (CLAUDE.md AI rules).
+  input           Json
+  proposedContent Json
+  status          AiProposalStatus @default(PENDING)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  reviewedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Domains & integrations (Phase 6)
+// ---------------------------------------------------------------------------
+
+model Domain {
+  id                String    @id @default(cuid())
+  organizationId    String
+  hostname          String    @unique
+  verificationToken String
+  verifiedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// Generic outgoing webhook — deliberately not a specific third-party
+// connector (CRM name, etc.); see docs/roadmap.md Phase 6.
+model WebhookSubscription {
+  id             String      @id @default(cuid())
+  organizationId String
+  url            String
+  eventTypes     EventType[]
+  signingSecret  String
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Site connection & understanding (new Phase 1 — see docs/roadmap.md,
+// docs/decisions.md D6). Fresh models, deliberately not a repurposing of
+// Page/Component above: those mean "a page Dynamify hosts and versions."
+// A Site is a page on the customer's own site that we only ever read.
+// ---------------------------------------------------------------------------
+
+enum SiteStatus {
+  PENDING
+  CRAWLING
+  UNDERSTANDING
+  READY
+  FAILED
+}
+
+model Site {
+  id                     String     @id @default(cuid())
+  organizationId         String
+  url                    String
+  status                 SiteStatus @default(PENDING)
+  errorMessage           String?
+  // Phase 6 (docs/roadmap.md): off by default — a customer has to
+  // explicitly opt a site into IP-based firmographic enrichment
+  // (src/lib/enrichment/ipFirmographics.ts), the same "nothing goes live
+  // unapproved" posture used everywhere else, applied to enabling a new
+  // category of data collection instead of a content change.
+  ipEnrichmentEnabled    Boolean    @default(false)
+  // Off by default — a real, re-identifiable first-party cookie
+  // (dynamify_vid), not an anonymous event. Deliberate reversal of the
+  // anonymous-only SiteEvent design (D7, docs/decisions.md), decided
+  // explicitly, not silently: see the widened D5 entry there for the
+  // real disclosure/consent caveat this carries that code can't resolve.
+  visitorTrackingEnabled Boolean    @default(false)
+  // Off by default (0). Hardening: the existing generic-vs-personalized
+  // Analytics comparison is confounded — it compares visitors who matched
+  // a rule against visitors who didn't, two different populations, not a
+  // control group. This is the actual fix: a merchant-configurable % of
+  // otherwise-qualifying visitors sees the default anyway
+  // (src/lib/experiments/holdout.ts), so lift can be measured against a
+  // true control group. Capped at 50 — can't hold back more than half of
+  // qualifying traffic. See SiteEvent.heldOut for the recorded outcome.
+  holdbackPercent        Int        @default(0)
+  // Off by default. Hardening: "accept all personalization" was asked for
+  // as real auto-approval, not just a bulk-approve button — product-spec
+  // §17's "Automatic Personalization," which the spec itself gates as
+  // "if explicitly enabled." Scoped narrowly: only AI-generated image
+  // variants (generateImageVariant), and only for elements whose
+  // effective PersonalizationBoundary is ALLOWED — a Restricted element
+  // (pricing, legal text) exists specifically because it needs a human's
+  // judgment, so this can never skip that regardless of this setting.
+  autoApproveAiContent   Boolean    @default(false)
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  organization  Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pages         CrawledPage[]
+  understanding WebsiteUnderstanding?
+
+  @@index([organizationId])
+}
+
+// IP -> company, a fact about the internet rather than about any one
+// customer, so this is deliberately global rather than per-org — the same
+// IP resolves to the same company for every Dynamify site it visits. No
+// visitor identity is ever stored here, only an IP and what it maps to;
+// see docs/decisions.md D5 for why even that gets a short TTL rather than
+// being kept indefinitely.
+// docs/visitor-data.md: "Resolve, use, discard; do not store raw IPs
+// beyond what is needed for the lookup" / "Raw IP: never persisted;
+// resolved to country/company in memory and discarded." Keyed by a
+// SHA-256 hash of the IP (same primitive src/lib/auth/session.ts
+// already uses for tokens), never the raw value — the hash still lets a
+// repeat visitor from the same IP hit the cache, but the raw address is
+// never written anywhere. fetchedAt drives real deletion now (see
+// src/lib/enrichment/ipFirmographics.ts's cleanup), not just re-fetch
+// gating — this table was previously keyed by the raw IP with no
+// deletion at all; fixed as part of docs/roadmap.md's visitor-data pass.
+model IpEnrichmentCache {
+  ipHash    String   @id
+  company   String?
+  fetchedAt DateTime @default(now())
+
+  @@index([fetchedAt])
+}
+
+model CrawledPage {
+  id             String   @id @default(cuid())
+  siteId         String
+  organizationId String
+  url            String
+  title          String?
+  crawledAt      DateTime @default(now())
+
+  site                 Site                  @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  elements             ContentElement[]
+  events               SiteEvent[]
+  recommendations      Recommendation[]
+  impressions          Impression[]
+  generatedExperiences GeneratedExperience[]
+
+  @@unique([siteId, url])
+  @@index([organizationId])
+  @@index([siteId])
+}
+
+enum ContentSection {
+  HERO
+  FEATURES
+  TESTIMONIALS
+  CTA
+  NAV
+  FOOTER
+  PRICING
+  FAQ
+  OTHER
+}
+
+enum ContentElementType {
+  HEADLINE
+  SUBHEADLINE
+  BODY
+  IMAGE
+  CTA_LABEL
+  CTA_HREF
+  LOGO
+  NAV_LABEL
+  OTHER
+}
+
+// Product-spec.md §14: "The user should be able to control what the AI
+// is allowed to change." NEVER is a hard block on creating new rules
+// (src/lib/sites/personalization.ts); RESTRICTED requires an explicit
+// per-request acknowledgment but isn't blocked outright. Nullable on
+// ContentElement — null means "use this element type's default"
+// (src/lib/sites/boundaries.ts), not "unset."
+enum PersonalizationBoundary {
+  ALLOWED
+  RESTRICTED
+  NEVER
+}
+
+model ContentElement {
+  id                      String                   @id @default(cuid())
+  crawledPageId           String
+  organizationId          String
+  section                 ContentSection
+  elementType             ContentElementType
+  // Best-effort CSS path captured at crawl time. The runtime *verification*
+  // strategy against the live DOM (fingerprint, re-check cadence, etc.) is
+  // D2/D3 in docs/decisions.md — deliberately not decided here, this is
+  // just what Phase 1's extraction observed.
+  selector                String
+  currentContent          String                   @db.Text
+  order                   Int
+  // Explicit per-element override of DEFAULT_BOUNDARY_BY_TYPE
+  // (src/lib/sites/boundaries.ts). Null = inherit the type default.
+  personalizationBoundary PersonalizationBoundary?
+  createdAt               DateTime                 @default(now())
+
+  crawledPage          CrawledPage                  @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
+  variants             ElementVariant[]
+  personalizationRules ElementPersonalizationRule[]
+  siteEvents           SiteEvent[]
+
+  @@index([organizationId])
+  @@index([crawledPageId])
+}
+
+// Live View / eventual embed-script personalization for Site content — the
+// ContentElement-targeted equivalent of ComponentVariant/PersonalizationRule
+// above, which are FK'd to the superseded Component model specifically.
+// Audience/AudienceRule are reused unchanged: they were always model-agnostic.
+model ElementVariant {
+  id               String        @id @default(cuid())
+  organizationId   String
+  contentElementId String
+  content          String        @db.Text
+  method           VariantMethod @default(MANUAL)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  contentElement       ContentElement               @relation(fields: [contentElementId], references: [id], onDelete: Cascade)
+  personalizationRules ElementPersonalizationRule[]
+
+  @@index([organizationId])
+  @@index([contentElementId])
+}
+
+model ElementPersonalizationRule {
+  id                    String                    @id @default(cuid())
+  organizationId        String
+  contentElementId      String
+  audienceId            String
+  elementVariantId      String
+  priority              Int                       @default(0)
+  status                PersonalizationRuleStatus @default(PENDING)
+  // Set only when this rule was created as part of a coordinated batch
+  // (src/lib/sites/generateExperience.ts) — lets the UI review/approve/
+  // reject the whole set as one unit while every individual action
+  // (approve/disable/enable/delete) still works on this row exactly as
+  // it does for a rule created any other way.
+  generatedExperienceId String?
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+
+  contentElement      ContentElement       @relation(fields: [contentElementId], references: [id], onDelete: Cascade)
+  audience            Audience             @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  elementVariant      ElementVariant       @relation(fields: [elementVariantId], references: [id], onDelete: Cascade)
+  generatedExperience GeneratedExperience? @relation(fields: [generatedExperienceId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([contentElementId])
+  @@index([audienceId])
+  @@index([generatedExperienceId])
+}
+
+enum GeneratedExperienceStatus {
+  PENDING
+  PARTIALLY_APPROVED
+  APPROVED
+  REJECTED
+}
+
+// A coordinated, per-segment content bundle (docs/roadmap.md Hardening —
+// "full-experience generator"): one generation call produces a coherent
+// SET of ElementPersonalizationRules for many elements on the same page
+// at once, reviewed and approved together, rather than the merchant
+// clicking through each element individually. Explicitly not a new page
+// or a layout change — same URL, same structure, only the content story
+// changes for this audience (docs/product-spec.md's own stated
+// differentiator). status is a read-modeled rollup of its rules'
+// statuses (see setGeneratedExperienceStatus), not independently
+// authoritative.
+model GeneratedExperience {
+  id             String                    @id @default(cuid())
+  organizationId String
+  crawledPageId  String
+  audienceId     String
+  status         GeneratedExperienceStatus @default(PENDING)
+  createdAt      DateTime                  @default(now())
+
+  crawledPage CrawledPage                  @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
+  audience    Audience                     @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  rules       ElementPersonalizationRule[]
+
+  @@index([organizationId])
+  @@index([crawledPageId])
+  @@index([audienceId])
+}
+
+enum UnderstandingMethod {
+  AI
+  HEURISTIC
+}
+
+// Phase 3 (docs/roadmap.md): "nothing goes live unapproved." Every rule
+// starts PENDING regardless of how its content was authored (manual entry,
+// AI, or heuristic re-selection) — resolve() only ever sees APPROVED ones
+// (see getLiveViewDefinition, the one choke point every resolver reads
+// through).
+enum PersonalizationRuleStatus {
+  PENDING
+  APPROVED
+  DISABLED
+}
+
+// Phase 3 (docs/roadmap.md): "every deployed change is visible... with its
+// reason" — this is that reason, visible on a rule long after it was
+// created, not just in the moment it was suggested.
+enum VariantMethod {
+  MANUAL
+  AI
+  HEURISTIC
+}
+
+model WebsiteUnderstanding {
+  id              String              @id @default(cuid())
+  siteId          String              @unique
+  organizationId  String
+  companySummary  String              @db.Text
+  productSummary  String              @db.Text
+  targetCustomers String              @db.Text
+  brandTone       Json
+  valueProps      Json
+  primaryCta      String?
+  // Whether this came from a real AI call or the rule-based fallback (no
+  // ANTHROPIC_API_KEY configured) — always shown, never blurred together.
+  // See docs/decisions.md and src/lib/sites/autoClassify.ts.
+  method          UnderstandingMethod @default(AI)
+  generatedAt     DateTime            @default(now())
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// Phase 5 (docs/roadmap.md): the missing capability — nothing reported
+// real usage back to us for the Site/ContentElement model at all before
+// this. Deliberately anonymous (no visitor-identity/session cookie — D5,
+// docs/decisions.md, flags that as a real open question segment analysis
+// doesn't actually need: counting independent events by context value
+// doesn't require correlating them to one visitor). CTA_CLICK added in
+// Phase 6 for generic-vs-personalized conversion reporting (D7,
+// docs/decisions.md — an aggregate ratio, not a per-visitor funnel, to
+// stay inside this same anonymous-events design).
+enum SiteEventType {
+  PAGE_VIEW
+  CTA_CLICK
+}
+
+model SiteEvent {
+  id               String        @id @default(cuid())
+  organizationId   String
+  siteId           String
+  crawledPageId    String
+  // Set only for CTA_CLICK — which CTA was clicked. Never trusted as-is:
+  // src/lib/embed/service.ts only accepts one that's actually a member of
+  // the resolved page's own components before recording anything.
+  contentElementId String?
+  // Set only when the site has visitor tracking enabled and the visitor
+  // sent a real dynamify_vid cookie value — nullable since cookies can
+  // be blocked and existing rows predate this column entirely.
+  visitorId        String?
+  type             SiteEventType
+  // Whether *this specific rendering* was personalized for this visitor —
+  // computed and stored once, at record time (D7). Deliberately not
+  // derived later from `context` at report time: re-running resolve()
+  // against today's audience/rule state would silently rewrite history
+  // every time a rule gets approved or disabled after the fact. This
+  // column is what makes each row an immutable fact about what the
+  // visitor actually saw.
+  personalized     Boolean
+  // True only when this visit matched an approved rule *and* the holdout
+  // draw (src/lib/experiments/holdout.ts) withheld it anyway, showing the
+  // default instead — the true control group for causal lift, as opposed
+  // to a visitor who never matched anything. `personalized` and `heldOut`
+  // are never both true: a held-out visit is definitionally not
+  // personalized. Always false when Site.holdbackPercent is 0 (the
+  // default), so every event recorded before this column existed reads
+  // identically to one on a site that's never turned holdout on.
+  heldOut          Boolean       @default(false)
+  // The resolved VisitorContext for this view — device, geo, referrer,
+  // utm.* — the raw material src/lib/recommendations/analyze.ts reads.
+  context          Json
+  createdAt        DateTime      @default(now())
+
+  crawledPage    CrawledPage     @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
+  contentElement ContentElement? @relation(fields: [contentElementId], references: [id], onDelete: Cascade)
+  visitor        SiteVisitor?    @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  conversion     Conversion?
+
+  @@index([organizationId])
+  @@index([siteId])
+  @@index([siteId, type])
+  @@index([siteId, type, personalized])
+  @@index([siteId, type, heldOut])
+  @@index([crawledPageId])
+  @@index([contentElementId])
+  @@index([visitorId])
+}
+
+// Real, re-identifiable visitor identity — deliberately separate from the
+// anonymous SiteEvent model above (D7, D5, docs/decisions.md). Only ever
+// created when a site has visitorTrackingEnabled and the visitor actually
+// sent a dynamify_vid cookie value. company/interest/intentScore/stage
+// are recomputed on every event from src/lib/visitors/inferProfile.ts —
+// a small, named, pure heuristic, not a certainty (see that file and
+// docs/roadmap.md's Hardening note for exactly what's real vs. guessed).
+model SiteVisitor {
+  id             String   @id @default(cuid())
+  organizationId String
+  siteId         String
+  visitorKey     String
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @updatedAt
+  pageViewCount  Int      @default(0)
+  ctaClickCount  Int      @default(0)
+  // The de-duplicated source of truth for distinctPages below — a small
+  // JSON array of crawledPageIds seen, not a join table, since this is
+  // feeding a heuristic score, not something that needs to be queried on
+  // its own. distinctPages is kept as a plain int alongside it purely so
+  // the Visitors table can read a count without parsing this on display.
+  visitedPageIds Json     @default("[]")
+  distinctPages  Int      @default(0)
+  // Company-tier identity (docs/visitor-data.md) — a real Company row,
+  // not a bare repeated string, so visitors at the same company dedupe.
+  companyId      String?
+  // Person-tier identity — only ever set when volunteered (a form, an
+  // authenticated session). Null for virtually every visitor; that's
+  // correct, not a gap (see the Person model's own comment).
+  personId       String?
+  // {necessary: true, analytics: bool, personalization: bool} — an
+  // input to the engine, not a wrapper around it (docs/visitor-data.md's
+  // Consent architecture section). Defaults to necessary-only, the
+  // doc's stated default posture before any consent signal.
+  consentState   Json     @default("{\"necessary\":true,\"analytics\":false,\"personalization\":false}")
+  lastDevice     String?
+  interest       String?
+  intentScore    Float    @default(0)
+  stage          String   @default("awareness")
+
+  company  Company?         @relation(fields: [companyId], references: [id])
+  person   Person?          @relation(fields: [personId], references: [id])
+  events   SiteEvent[]
+  sessions VisitorSession[]
+
+  @@unique([siteId, visitorKey])
+  @@index([organizationId])
+  @@index([siteId])
+  @@index([companyId])
+}
+
+// Company-tier identity (docs/visitor-data.md) — resolved from a
+// visitor's IP via the existing enrichment pipeline
+// (src/lib/enrichment/ipFirmographics.ts). Deduped per org, primarily
+// by domain when a provider gives one; the one real provider configured
+// today (ipinfo.io's basic tier) only returns an org/company *name*, no
+// domain, so `domain` stays nullable and name-based dedup is handled at
+// the application layer (findOrCreateCompany, src/lib/visitors/service.ts)
+// rather than a second DB-level unique constraint Postgres can't express
+// as "unique on domain OR name." Never a person — see Person below.
+model Company {
+  id             String   @id @default(cuid())
+  organizationId String
+  domain         String?
+  name           String?
+  sizeBand       String?
+  industry       String?
+  source         String   @default("ip_enrichment")
+  resolvedAt     DateTime @default(now())
+
+  visitors SiteVisitor[]
+
+  @@unique([organizationId, domain])
+  @@index([organizationId])
+}
+
+enum PersonSource {
+  FORM
+  AUTH
+  CRM
+}
+
+// Person-tier identity (docs/visitor-data.md) — only ever created when a
+// visitor is volunteered: a form submission, an authenticated session,
+// or a CRM record the merchant already holds lawfully. Never inferred,
+// never purchased, never matched from an identity graph. Nullable
+// everywhere it's referenced; staying null is correct, not a gap, for
+// the overwhelming majority of visitors — no flow in this product
+// captures an email/name today, so this model exists so a future
+// form/auth-gated flow has somewhere real to write, not as a populated
+// feature yet.
+model Person {
+  id             String       @id @default(cuid())
+  organizationId String
+  email          String
+  name           String?
+  source         PersonSource
+  consentedAt    DateTime     @default(now())
+
+  visitors SiteVisitor[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+}
+
+// Per-visit detail (docs/visitor-data.md) — SiteVisitor above holds only
+// running totals across all time, overwriting lastDevice/interest on
+// every event; this captures the history that would otherwise be lost
+// (which referrer/UTM/device/geo a *specific* visit came from). No
+// explicit "closed" flag: the most recent VisitorSession row for a
+// visitor with lastEventAt within the session-gap window of now *is*
+// the open session (upsertSession, src/lib/visitors/service.ts) — no
+// background job needed to close one. Named VisitorSession, not
+// Session — that name is already the auth login-session model above.
+model VisitorSession {
+  id             String   @id @default(cuid())
+  organizationId String
+  visitorId      String
+  startedAt      DateTime @default(now())
+  lastEventAt    DateTime @default(now())
+  referrer       String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  device         String?
+  geoCountry     String?
+  geoRegion      String?
+  pageViewCount  Int      @default(0)
+  ctaClickCount  Int      @default(0)
+
+  visitor     SiteVisitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  impressions Impression[]
+  conversions Conversion[]
+
+  @@index([organizationId])
+  @@index([visitorId, lastEventAt])
+}
+
+// docs/visitor-data.md: "what each visitor was actually shown... the
+// most valuable data we hold." One row per personalized component per
+// page view (a page with 2 personalized elements produces 2 rows) —
+// written from recordSiteEvent (src/lib/embed/service.ts) alongside the
+// existing SiteEvent insert, only when the site has visitor tracking
+// on. audienceId/ruleId/elementVariantId are deliberately plain,
+// non-FK columns, not relations: this is a historical record of what
+// was shown, and must survive the audience/rule/variant it references
+// later being edited or deleted — the same reasoning SiteEvent.context
+// already applies informally.
+model Impression {
+  id               String   @id @default(cuid())
+  organizationId   String
+  sessionId        String
+  crawledPageId    String
+  audienceId       String
+  ruleId           String
+  elementVariantId String
+  occurredAt       DateTime @default(now())
+
+  session     VisitorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  crawledPage CrawledPage    @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([sessionId])
+  @@index([crawledPageId])
+}
+
+// A real, stored, timestamped conversion fact (docs/visitor-data.md),
+// replacing the previous derived-at-read-time "ctaClickCount > 0"
+// boolean (src/lib/visitors/dto.ts). goalId stays null — no
+// configurable-goal concept exists in this product yet (docs/roadmap.md
+// Phase 6 explicitly deferred one, on purpose); this only ever fires on
+// a real CTA_CLICK SiteEvent, the same trigger "converted" already used.
+model Conversion {
+  id             String   @id @default(cuid())
+  organizationId String
+  sessionId      String
+  siteEventId    String   @unique
+  goalId         String?
+  value          Float?
+  currency       String?
+  occurredAt     DateTime @default(now())
+
+  session   VisitorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  siteEvent SiteEvent      @relation(fields: [siteEventId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([sessionId])
+}
+
+enum RecommendationStatus {
+  PENDING
+  ACCEPTED
+  IGNORED
+}
+
+// One row per (page, field, value) segment that cleared analyze.ts's
+// sample-size and share thresholds — unique so re-running analysis
+// upserts instead of duplicating the same recommendation every time.
+model Recommendation {
+  id             String               @id @default(cuid())
+  organizationId String
+  siteId         String
+  crawledPageId  String
+  field          String
+  value          String
+  matchingEvents Int
+  totalEvents    Int
+  status         RecommendationStatus @default(PENDING)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  crawledPage CrawledPage @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
+
+  @@unique([crawledPageId, field, value])
+  @@index([organizationId])
+  @@index([siteId])
+}
+
+// Hardening (docs/roadmap.md, not phase-scoped): backs
+// src/lib/auth/rateLimit.ts. Replaces the original in-memory limiter,
+// which was single-process only and provided no real protection in any
+// multi-instance deployment. A fixed-window counter — one row per
+// (key, window) rather than one row per request, the standard cheap
+// approach for this class of problem — updated by a single atomic raw
+// SQL statement so concurrent requests for the same key can't race past
+// the limit. No FK to Organization: `key` is an arbitrary caller-defined
+// string (an IP, an org id, an email), not a real relation.
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(0)
+  windowEnd DateTime
+
+  @@index([windowEnd])
+}
+
+// ---------------------------------------------------------------------------
+// Ecommerce foundation (docs/ecommerce.md — specification only beyond this
+// model; do not build platform-specific adapters, catalogue sync, or
+// storefront personalization ahead of that doc's own phasing). This is only
+// "we have a connection to a store" — deliberately doesn't presuppose an
+// answer to that doc's open catalogue sync-vs-read-through question, since
+// no catalogue data is stored here at all.
+// ---------------------------------------------------------------------------
+
+enum PlatformType {
+  SHOPIFY
+  WOOCOMMERCE
+  SQUARESPACE
+}
+
+// Deliberately just two states, not a PENDING/FAILED lifecycle — those only
+// mean something once a real multi-step OAuth flow exists to produce them.
+// A failed connect() attempt today creates no row at all (see
+// src/lib/platformConnections/service.ts); add states if/when a real async
+// flow needs them, not preemptively.
+enum PlatformConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+}
+
+model PlatformConnection {
+  id                   String                   @id @default(cuid())
+  organizationId       String
+  platform             PlatformType
+  // Platform-specific store identifier (e.g. a Shopify myshopify.com
+  // domain) — not a Dynamify id. Globally unique, same posture as
+  // Domain.hostname: one real store connects to one Dynamify org at a time.
+  externalStoreId      String
+  status               PlatformConnectionStatus @default(CONNECTED)
+  // AES-256-GCM ciphertext (src/lib/security/encryption.ts), decrypted only
+  // server-side and only when actually calling the platform's API — never
+  // included in any DTO (CLAUDE.md: "never expose to any client"). Cleared
+  // (set null) on disconnect rather than kept around unused.
+  encryptedCredentials String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([platform, externalStoreId])
+  @@index([organizationId])
+}
+
+// docs/visitor-data.md Security: "Audit-log every export, CRM
+// connection, and deletion. Enterprise buyers will ask to see this."
+// Deliberately minimal — a write-side log, not a browsing UI (nothing
+// in this product reads AuditLog rows yet; when a real audit-trail
+// screen is built, the data is already there). actorUserId is nullable
+// because a data-subject-rights request can originate from the
+// merchant's own end user via a public flow this product doesn't
+// implement (the merchant remains the controller, per that same
+// section) — not every entry has a Dynamify-authenticated actor.
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorUserId    String?
+  action         String
+  targetType     String
+  targetId       String
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
