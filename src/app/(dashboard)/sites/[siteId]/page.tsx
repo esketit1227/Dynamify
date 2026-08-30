@@ -1,11 +1,12 @@
-import { redirect } from "next/navigation";
+import { redirect, notFound } from "next/navigation";
 import { headers } from "next/headers";
 import { getSessionUser } from "@/lib/auth/session";
 import { getCurrentOrgForUser } from "@/lib/organizations/current";
-import { getSite } from "@/lib/sites/service";
+import { getSite, SiteNotFoundError } from "@/lib/sites/service";
 import { listAudiences } from "@/lib/audiences/service";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SiteDetail } from "@/components/sites/site-detail";
+import { originFromHeaders } from "@/lib/http/origin";
 
 export default async function SiteDetailPage({
   params,
@@ -18,18 +19,23 @@ export default async function SiteDetailPage({
   const organization = await getCurrentOrgForUser(user.id);
   if (!organization) redirect("/login");
 
+  // A stale bookmark, a shared link to an already-removed site, or another
+  // org's id all land here identically (getSite never distinguishes "gone"
+  // from "not yours") — this is the deliberate 404 path for that, not the
+  // generic error boundary. Anything else getSite could throw is a real
+  // failure and still propagates to (dashboard)/error.tsx as before.
   const [site, audiences] = await Promise.all([
-    getSite(organization.id, siteId),
+    getSite(organization.id, siteId).catch((error) => {
+      if (error instanceof SiteNotFoundError) notFound();
+      throw error;
+    }),
     listAudiences(organization.id),
   ]);
 
   // Derived server-side (never window.location) so the embed snippet's
   // origin is correct on the very first render — no client-only effect,
   // no hydration mismatch to work around.
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("host") ?? "localhost:3000";
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  const origin = `${protocol}://${host}`;
+  const origin = originFromHeaders(await headers());
 
   return (
     <>

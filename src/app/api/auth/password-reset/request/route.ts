@@ -4,6 +4,7 @@ import { requestPasswordReset } from "@/lib/auth/service";
 import { rateLimit, clientIpFromRequest } from "@/lib/auth/rateLimit";
 import { RateLimitedError } from "@/lib/auth/errors";
 import { toErrorResponse } from "@/lib/api/respond";
+import { originFromHeaders } from "@/lib/http/origin";
 
 // Always responds 200 with the same generic message, whether or not the
 // email belongs to an account — an attacker probing emails learns nothing.
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
       throw new RateLimitedError("Too many requests. Try again later.", limited.retryAfterMs);
     }
 
-    await requestPasswordReset(body.email);
+    await requestPasswordReset(body.email, originFromHeaders(request.headers));
 
     return NextResponse.json(GENERIC_RESPONSE);
   } catch (error) {

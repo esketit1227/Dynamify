@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel a stale run on the same branch/PR when a new push arrives, rather
+# than burning CI minutes finishing a check for a commit nobody cares about
+# anymore.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    # Integration tests hit a real Postgres database, not mocks (see
+    # tests/setup/env.ts and the README's Testing philosophy) — this
+    # service container is that database for CI. Same major version as
+    # local dev (Postgres 16).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dynamify
+          POSTGRES_PASSWORD: dynamify
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://dynamify:dynamify@localhost:5432/dynamify_dev
+      TEST_DATABASE_URL: postgresql://dynamify:dynamify@localhost:5432/dynamify_test
+      SESSION_COOKIE_NAME: dynamify_session
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # typecheck/lint are pure static analysis — no database, no env vars
+      # actually read at runtime — so they run before any DB setup and
+      # fail fast on the cheapest checks first.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Create databases
+        run: |
+          PGPASSWORD=dynamify psql -h localhost -U dynamify -d postgres -c "CREATE DATABASE dynamify_dev;"
+          PGPASSWORD=dynamify psql -h localhost -U dynamify -d postgres -c "CREATE DATABASE dynamify_test;"
+
+      # Several scripts in this repo (prisma7.config.ts, tests/setup/env.ts,
+      # scripts/migrate-test-db.mjs) read a real .env file directly rather
+      # than only process.env, matching local dev — CI writes the same file
+      # instead of changing that convention just for itself.
+      - name: Write .env
+        run: |
+          cat > .env <<EOF
+          DATABASE_URL="${{ env.DATABASE_URL }}"
+          TEST_DATABASE_URL="${{ env.TEST_DATABASE_URL }}"
+          SESSION_COOKIE_NAME="${{ env.SESSION_COOKIE_NAME }}"
+          EOF
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Apply migrations
+        run: |
+          pnpm exec prisma migrate deploy
+          pnpm db:test:migrate
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

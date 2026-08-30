@@ -4,6 +4,9 @@ import { env } from "@/lib/env";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { issueSession, destroyAllSessionsForUser, type IssuedSession } from "@/lib/auth/session";
 import { slugify, slugWithSuffix } from "@/lib/slug";
+import { sendEmail } from "@/lib/email/client";
+import { passwordResetEmail } from "@/lib/email/templates";
+import { EmailNotConfiguredError } from "@/lib/email/errors";
 import {
   EmailInUseError,
   InvalidCredentialsError,
@@ -63,7 +66,12 @@ export async function login(input: LoginInput): Promise<IssuedSession> {
 
 const RESET_TOKEN_DURATION_MS = 60 * 60 * 1000; // 1 hour
 
-export async function requestPasswordReset(email: string): Promise<{ devToken?: string }> {
+// `origin` builds the absolute link the email points back to (see
+// src/lib/http/origin.ts) — passed in from the route rather than
+// hardcoded, so this works correctly against whatever host the app is
+// actually reached at instead of an env var that has to be kept in sync
+// with it by hand.
+export async function requestPasswordReset(email: string, origin: string): Promise<{ devToken?: string }> {
   const user = await prisma.user.findUnique({ where: { email } });
   // No early return skips anything user-visible — the route always responds
   // 200 regardless, so there's nothing to branch on here.
@@ -77,14 +85,32 @@ export async function requestPasswordReset(email: string): Promise<{ devToken?: 
     data: { userId: user.id, tokenHash, expiresAt },
   });
 
-  // No email provider yet (Integrations is a later phase), so there is no
-  // real send path. CLAUDE.md forbids logging tokens, so this never goes to
-  // console in dev or prod — the token is returned only under NODE_ENV=test,
-  // as a narrow, explicit hook so the full reset lifecycle is testable
-  // without duplicating the hashing logic in test code.
+  // CLAUDE.md forbids logging tokens, so this never goes to console in dev
+  // or prod — the token is returned only under NODE_ENV=test, as a narrow,
+  // explicit hook so the full reset lifecycle is testable without
+  // duplicating the hashing logic in test code or making a real network
+  // call from a test run.
   if (env.NODE_ENV === "test") {
     return { devToken: token };
   }
+
+  // A send failure — not configured, or a real provider error — is never
+  // surfaced to the caller: the route responds with the same generic
+  // message either way (the whole point of that message is that an
+  // attacker probing emails learns nothing from the difference). Not
+  // configured is an expected, common state and stays silent; a genuine
+  // provider error still gets logged (no token, no email address in the
+  // line) so it's not invisible operationally.
+  try {
+    const resetUrl = `${origin}/reset-password?token=${token}`;
+    const { subject, html, text } = passwordResetEmail(resetUrl);
+    await sendEmail({ to: email, subject, html, text });
+  } catch (error) {
+    if (!(error instanceof EmailNotConfiguredError)) {
+      console.error("Password reset email failed to send:", error);
+    }
+  }
+
   return {};
 }
 

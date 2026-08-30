@@ -16,7 +16,7 @@ describe("password reset", () => {
       organizationName: "Acme Inc",
     });
 
-    const { devToken } = await requestPasswordReset("reset@example.com");
+    const { devToken } = await requestPasswordReset("reset@example.com", "http://localhost:3000");
     expect(devToken).toBeTruthy();
 
     await confirmPasswordReset(devToken!, "brand-new-password-456");
@@ -34,7 +34,7 @@ describe("password reset", () => {
   });
 
   it("does not reveal whether an email exists", async () => {
-    const result = await requestPasswordReset("nobody@example.com");
+    const result = await requestPasswordReset("nobody@example.com", "http://localhost:3000");
     expect(result.devToken).toBeUndefined();
   });
 
@@ -44,7 +44,7 @@ describe("password reset", () => {
       password: "original-password-123",
       organizationName: "Acme Inc",
     });
-    const { devToken } = await requestPasswordReset("reuse@example.com");
+    const { devToken } = await requestPasswordReset("reuse@example.com", "http://localhost:3000");
 
     await confirmPasswordReset(devToken!, "new-password-123");
 

@@ -107,7 +107,15 @@ model PasswordResetToken {
 }
 
 // ---------------------------------------------------------------------------
-// Projects & pages
+// Projects & pages — RETIRED (docs/roadmap.md, 2026-08-30). The superseded
+// "Dynamify hosts your page" model — see docs/product-spec.md's replacement.
+// Every route, page, and service that used Project/Page/PageVersion/
+// Component/ComponentVariant/Campaign/CampaignAssignment/Domain has been
+// removed from the application. Left here, untouched, deliberately: real
+// rows exist and dropping tables is a separate, more consequential
+// decision than removing dead application code. Do not build new features
+// against these models — the current architecture is Site/CrawledPage/
+// ContentElement (see the section below).
 // ---------------------------------------------------------------------------
 
 model Project {

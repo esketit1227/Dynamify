@@ -1,9 +1,6 @@
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/auth/errors";
 import { generateAudiences } from "@/lib/ai/generateAudiences";
-import { generateCopy } from "@/lib/ai/generateCopy";
-import { updateComponent } from "@/lib/pages/service";
-import type { ComponentType } from "@/lib/pages/componentFields";
 import type { Prisma, AiProposal } from "@/generated/prisma/client";
 import type { RuleOperator } from "@/generated/prisma/enums";
 
@@ -68,30 +65,6 @@ export async function createAudienceProposal(
   return toDTO(proposal);
 }
 
-export async function createCopyProposal(
-  organizationId: string,
-  componentId: string,
-  type: ComponentType,
-  brief: string,
-): Promise<ProposalDTO> {
-  const component = await prisma.component.findFirst({
-    where: { id: componentId, organizationId },
-  });
-  if (!component) throw new HttpError(404, "Component not found");
-
-  const generated = await generateCopy(type, brief);
-
-  const proposal = await prisma.aiProposal.create({
-    data: {
-      organizationId,
-      kind: "COPY",
-      input: { componentId, type, brief } as Prisma.InputJsonValue,
-      proposedContent: generated as unknown as Prisma.InputJsonValue,
-    },
-  });
-  return toDTO(proposal);
-}
-
 async function getPendingProposal(organizationId: string, proposalId: string) {
   const proposal = await prisma.aiProposal.findFirst({
     where: { id: proposalId, organizationId },
@@ -133,10 +106,6 @@ export async function approveProposal(organizationId: string, proposalId: string
         }),
       ),
     );
-  } else if (proposal.kind === "COPY") {
-    const input = proposal.input as { componentId: string };
-    const content = proposal.proposedContent as Record<string, string>;
-    await updateComponent(organizationId, input.componentId, { defaultContent: content });
   }
 
   await prisma.aiProposal.update({

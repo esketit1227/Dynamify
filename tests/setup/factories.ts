@@ -26,18 +26,3 @@ export async function createOrgWithUser(role: Role = "OWNER") {
 
   return { organization, user };
 }
-
-export async function createPage(organizationId: string) {
-  const project = await prisma.project.create({
-    data: { organizationId, name: unique("Project"), slug: unique("project") },
-  });
-
-  return prisma.page.create({
-    data: {
-      organizationId,
-      projectId: project.id,
-      name: unique("Page"),
-      slug: unique("page"),
-    },
-  });
-}

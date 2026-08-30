@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const FOOTER_COLS = [
   { t: "Product", items: ["Personalization", "Signals", "Brand profile", "Analytics"] },
   { t: "Company", items: ["About", "Careers", "Customers", "Blog"] },
@@ -31,9 +33,22 @@ export function LandingFooter() {
           </div>
         ))}
       </div>
-      <div className="mx-auto mt-14 flex max-w-[1180px] justify-between gap-5 border-t border-[#edecf1] pt-[22px] text-[11px] text-[#9d9ba4]">
+      <div className="mx-auto mt-14 flex max-w-[1180px] flex-wrap justify-between gap-x-5 gap-y-2 border-t border-[#edecf1] pt-[22px] text-[11px] text-[#9d9ba4]">
         <span>© 2026 Dynamify</span>
-        <span>Privacy · Terms · GDPR</span>
+        <span className="flex gap-3">
+          <Link href="/privacy" className="text-[#9d9ba4] no-underline transition-colors hover:text-[#111014]">
+            Privacy
+          </Link>
+          <Link href="/terms" className="text-[#9d9ba4] no-underline transition-colors hover:text-[#111014]">
+            Terms
+          </Link>
+          <Link
+            href="/privacy#gdpr-ccpa-rights"
+            className="text-[#9d9ba4] no-underline transition-colors hover:text-[#111014]"
+          >
+            GDPR
+          </Link>
+        </span>
       </div>
     </footer>
   );

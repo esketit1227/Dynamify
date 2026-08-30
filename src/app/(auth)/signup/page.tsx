@@ -80,7 +80,19 @@ export default function SignupPage() {
         </Button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-muted">
+      <p className="mt-4 text-center text-xs text-muted">
+        By creating an account, you agree to Dynamify&apos;s{" "}
+        <Link href="/terms" className="underline underline-offset-2">
+          Terms of Service
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="underline underline-offset-2">
+          Privacy Policy
+        </Link>
+        .
+      </p>
+
+      <p className="mt-4 text-center text-sm text-muted">
         Already have an account?{" "}
         <Link href="/login" className="font-medium text-foreground underline underline-offset-2">
           Log in

@@ -1390,3 +1390,124 @@ section; confirmed the Overview screenshot shows real numbers (e.g. a
 genuine +154% lift line and an 11.1%-vs-28.2% bar comparison against this
 environment's actual seeded traffic). All scratch sites/audiences/scripts
 created for verification were removed afterward.
+
+## 2026-08-30 — Two crash bugs fixed; the old hosted-page model retired for real
+
+Found in a full product QA sweep: `/sites/[siteId]` and
+`/pages/[pageId]/edit` both threw an uncaught `HttpError` (`SiteNotFoundError`/
+`PageNotFoundError`) for a stale link, a mistyped id, or another org's id —
+a raw 500 instead of a graceful not-found. Both now catch the specific
+not-found error and call `notFound()`; a new `(dashboard)/not-found.tsx`
+renders a real on-brand "Not found" state inside the normal dashboard
+shell instead of the generic `(dashboard)/error.tsx` boundary (which is
+for real failures, not "this doesn't exist").
+
+Separately: `/audiences`, `/campaigns`, and `/pages` were reachable by URL
+but linked from nowhere in the nav — asked to resolve that limbo one way
+or the other. Audiences (real, current, load-bearing — used by
+personalization, recommendations, and the full-experience generator) was
+promoted into the primary nav. Campaigns and Pages — the "Dynamify hosts
+your page" model the 2026-08-26 pivot already named superseded — were
+retired for real instead of promoted: every route, page, component, and
+service built on `Project`/`Page`/`PageVersion`/`Component`/
+`ComponentVariant`/`Campaign`/`CampaignAssignment`/`Domain` was removed
+(~20 files), along with the now-pointless `{slug}.BASE_DOMAIN -> /p/{slug}`
+subdomain-rewrite middleware (`src/proxy.ts`) and the `BASE_DOMAIN` env
+var it existed for. Shared code the old model happened to sit next to was
+kept and trimmed instead of deleted wholesale: `safeContentString`/
+`DANGEROUS_URL_SCHEME` (`src/lib/validation/pages.ts`) and the AUDIENCE
+half of `src/lib/ai/proposals.ts` are still real, current dependencies of
+the Audiences AI-generation flow — only the COPY-proposal branch and
+`generateCopy.ts` went. The Prisma schema itself is untouched (no
+migration) — real rows exist in these tables, and dropping tables with
+live data is a separate, more consequential decision than removing dead
+application code; the schema section is marked with an explicit RETIRED
+comment instead so a future reader isn't left guessing.
+
+**Found but deliberately not touched in this pass, flagged instead:**
+`/api/collect` (`src/lib/tracking/*`, the `Event`/`Visitor` models) is
+*also* old-hosted-page-model code — `recordEvent` queries
+`prisma.page.findFirst(...)` directly, so with no way left to publish a
+new `Page` it's now permanently dead (never crashes, just can never
+succeed). Missed in this pass because it's an analytics path, not a
+UI/route surface, and this task's own scope was the nav-reachable pages
+specifically — real cleanup, next time this area gets touched.
+
+`pnpm typecheck && pnpm lint && pnpm test && pnpm build` all clean — 347
+tests (5 fewer than before: two cross-tenant tests exercised the old
+Page/Component model specifically and were rewritten against current
+resources rather than deleted outright, since the isolation principle
+they proved still matters). Live-verified in a browser: both fixed routes
+return a real 404 with the new not-found page; `/campaigns` and `/pages`
+404 identically; `/audiences` still works and now shows in the sidebar
+under General.
+
+## 2026-08-30 — CI stood up
+
+`.github/workflows/ci.yml`: typecheck → lint → migrate a real Postgres
+service container (dev + test databases, mirroring `pnpm db:migrate` /
+`pnpm db:test:migrate` exactly) → test → build, on every push and PR.
+Pure downside protection — nothing here was broken, this locks the
+already-clean state in. The existing tooling (`prisma7.config.ts`,
+`tests/setup/env.ts`, `scripts/migrate-test-db.mjs`) reads a real `.env`
+file directly rather than `process.env` alone, so CI writes one instead
+of changing that convention just for itself. Not simulated — every step
+was run for real, locally, against fresh throwaway databases
+(`dynamify_ci_dev`/`dynamify_ci_test`) standing in for the service
+container: all 21 migrations applied cleanly to an empty database, all
+347 tests passed with zero pre-existing data (proving the migration set
+has no hidden seed-data dependency), and the build succeeded — then the
+throwaway databases were dropped and the real `.env` restored, verified
+against real row counts unchanged.
+
+## 2026-08-30 — Privacy Policy & Terms scaffolded, not written
+
+`/privacy` and `/terms` (new `(legal)` route group, shared
+`LegalDocument` component) — real section structure grounded in how the
+product actually works (docs/visitor-data.md's consent layers, D5's
+processor/controller question, D5's AI-content liability question), legal
+language itself deliberately left as `[Placeholder — ...]` markers
+throughout. An unmissable "Draft — not final, not legal advice" banner
+sits above the fold on both pages — this exists so counsel has less to
+write, not so a real visitor could mistake it for a real policy in the
+meantime. The landing footer's "Privacy · Terms · GDPR" was plain
+non-functional text before this — now real links, GDPR pointing at an
+anchor on the new "Your rights" section rather than a bare page top.
+Signup gained a real "By creating an account, you agree to..." line,
+which didn't exist before either. `pnpm typecheck && pnpm lint && pnpm test
+&& pnpm build` all clean; live-verified in a browser, including clicking
+the GDPR link through to its actual anchor target.
+
+## 2026-08-30 — Transactional email: one swappable interface, wired into password reset
+
+`src/lib/email/` — `sendEmail({to, subject, html, text})` talks to
+Resend's plain REST API directly (no SDK dependency, same posture as
+`callOpenAiImage`/`enrichIp`), gated on `RESEND_API_KEY` exactly like
+every other optional integration in this app. `passwordResetEmail(url)`
+is the first template built on it. `requestPasswordReset` (`src/lib/auth/
+service.ts`) now takes an `origin` — pulled from `request.headers` at the
+route, via new `src/lib/http/origin.ts` (`originFromHeaders`), also
+refactored into `.../sites/[siteId]/page.tsx`'s existing embed-snippet
+origin logic so there's one implementation, not two — builds a real
+`/reset-password?token=...` link, and sends it. A send failure (not
+configured, or a real provider error) is caught and never surfaced to the
+caller: the route already always returns the identical generic message
+regardless of whether the account exists, and that invariant doesn't
+change just because email now exists — "not configured" stays silent,
+a genuine provider error still gets logged (no token, no email address in
+the line).
+
+The `NODE_ENV=test` short-circuit that returns `devToken` for the
+integration-test suite necessarily means the new send path can't be
+exercised by an automated test here (same structural gap
+`generateImageVariant`'s tests have, for the same reason) —
+`pnpm typecheck && pnpm lint && pnpm test && pnpm build` all clean (9 new
+unit tests for the pure pieces: the email template and the origin
+helper), and the real path was verified live instead, twice: once against
+a local mock Resend server confirming the exact request Resend would
+receive (real `from`/`to`/`subject`/correct reset link, real `Bearer`
+auth header) for a real password-reset request against the real running
+dev server, and once against a mock returning a real 500 confirming the
+failure path degrades exactly as designed — the client still gets the
+same 200, the failure is logged, and neither the token nor the email
+address appear in that log line.

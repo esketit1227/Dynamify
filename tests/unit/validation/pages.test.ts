@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { contentSchema, safeContentString } from "@/lib/validation/pages";
+import { safeContentString } from "@/lib/validation/pages";
 
 describe("safeContentString", () => {
   it("accepts ordinary text and http(s) URLs", () => {
@@ -13,16 +13,4 @@ describe("safeContentString", () => {
       expect(safeContentString.safeParse(value).success).toBe(false);
     },
   );
-});
-
-describe("contentSchema", () => {
-  it("rejects a component content object with a script-scheme field", () => {
-    const result = contentSchema.safeParse({ ctaHref: "javascript:alert(document.cookie)" });
-    expect(result.success).toBe(false);
-  });
-
-  it("accepts a normal content object", () => {
-    const result = contentSchema.safeParse({ headline: "Hello", ctaHref: "https://example.com" });
-    expect(result.success).toBe(true);
-  });
 });
