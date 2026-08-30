@@ -18,6 +18,8 @@ visitor sees the real, unmodified site — never a broken one.
 Full product vision: [`docs/product-spec.md`](docs/product-spec.md). Current
 phase and what's actually shipped vs. planned: [`docs/roadmap.md`](docs/roadmap.md).
 Open architectural/legal questions that haven't been resolved: [`docs/decisions.md`](docs/decisions.md).
+Last verified-clean commit, with the exact commands and results:
+[`docs/baseline.md`](docs/baseline.md).
 
 ## Status
 
