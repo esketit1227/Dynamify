@@ -119,10 +119,14 @@ export async function checkWithModel(currentContent: string, generatedText: stri
     model: AI_MODEL,
     max_tokens: 64,
     system:
-      "You are a fact-checker, not a copywriter. Given source material and a rewritten " +
-      "version, determine whether the rewrite introduces any claim, name, statistic, or " +
-      "specific detail not present in or directly implied by the source. Call the " +
-      "fact_check tool with your answer.",
+      "You are a fact-checker, not a copywriter. Given source material and a version " +
+      "rewritten for a specific visitor segment, determine whether the rewrite asserts " +
+      "any fact the source doesn't support: a named entity (a customer, partner, " +
+      "certification, or product name), a number or statistic, or a concrete claim about " +
+      "functionality or results. Personalization is expected to differ from the source — " +
+      "added framing, tone, emphasis, or a reference to the visitor's own context (their " +
+      "device, industry, or stage) is NOT a violation on its own, only a new factual " +
+      "assertion is. Call the fact_check tool with your answer.",
     messages: [
       {
         role: "user",

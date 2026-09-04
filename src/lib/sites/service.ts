@@ -4,7 +4,7 @@ import { assertSafeExternalUrl, UnsafeUrlError } from "@/lib/security/ssrfGuard"
 import { crawlSite, CrawlError, type CrawledPageResult } from "@/lib/sites/crawler";
 import { understandSite, type WebsiteUnderstandingResult } from "@/lib/sites/understand";
 import { classifyPageElements, buildHeuristicUnderstanding, deriveElementContent } from "@/lib/sites/autoClassify";
-import { AiNotConfiguredError, AiGenerationError } from "@/lib/ai/errors";
+import { AiGenerationError } from "@/lib/ai/errors";
 import { toSiteDTO, toSiteDetailDTO, type SiteDTO, type SiteDetailDTO } from "@/lib/sites/dto";
 import { seedDefaultAudiences } from "@/lib/audiences/service";
 import type { Prisma, ContentSection, ContentElementType, UnderstandingMethod } from "@/generated/prisma/client";
@@ -196,14 +196,14 @@ async function classify(
       pages: result.pages,
       understanding: result,
     };
-  } catch (error) {
-    if (!(error instanceof AiNotConfiguredError)) throw error;
-
-    // No API key configured — fall back to the rule-based classifier rather
-    // than hard-failing. This is what makes "connect your site" actually
-    // work for every account, not just one with AI configured; see
-    // docs/decisions.md and autoClassify.ts for what this mode does and
-    // doesn't claim to know.
+  } catch {
+    // Falls back to the rule-based classifier on ANY understanding failure —
+    // not configured, a bad/expired key, no credit balance, a rate limit, a
+    // transient network error, or a malformed model response
+    // (AiGenerationError). The reason doesn't change the outcome: "connect
+    // your site" must work for every account, not just one where the AI
+    // call happens to succeed today. See docs/decisions.md and
+    // autoClassify.ts for what this mode does and doesn't claim to know.
     const classifiedByPageId = new Map(
       crawl.pages.map((page) => [page.url, classifyPageElements(page.url, page.elements)]),
     );
@@ -235,6 +235,27 @@ export async function runCrawlAndUnderstand(siteId: string): Promise<void> {
 
     await prisma.site.update({ where: { id: siteId }, data: { status: "UNDERSTANDING" } });
     const { method, pages, understanding } = await classify(crawl);
+
+    // A retry (or any second run) on a site that already crawled
+    // successfully once would otherwise hit CrawledPage's
+    // @@unique([siteId, url]) on the very first insert and fail with an
+    // opaque error. Re-crawling is only safe to clear and replace when
+    // nothing real has been built on top of the old elements yet — if any
+    // of them already carry a live personalization rule, deleting the
+    // CrawledPage would cascade-delete that rule (onDelete: Cascade), which
+    // must never happen silently just because someone re-ran a crawl.
+    const priorPages = await prisma.crawledPage.findMany({ where: { siteId }, select: { id: true } });
+    if (priorPages.length > 0) {
+      const ruleCount = await prisma.elementPersonalizationRule.count({
+        where: { contentElement: { crawledPageId: { in: priorPages.map((p) => p.id) } } },
+      });
+      if (ruleCount > 0) {
+        throw new CrawlError(
+          "This site already has live personalization rules from an earlier crawl — re-crawling would remove them, so it's blocked. Contact support if you need this site re-crawled.",
+        );
+      }
+      await prisma.crawledPage.deleteMany({ where: { siteId } });
+    }
 
     await prisma.$transaction(async (tx) => {
       for (const { page, classifiedElements } of pages) {

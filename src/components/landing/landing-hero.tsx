@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 
 type Panel = {
   title: string;
@@ -65,6 +64,23 @@ const stripedPattern = {
 export function LandingHero() {
   const [tab, setTab] = useState(0);
   const panel = PANELS[tab];
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => {
+      if (query.matches) {
+        video.pause();
+      } else {
+        video.play().catch(() => {});
+      }
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
 
   return (
     <section
@@ -74,78 +90,87 @@ export function LandingHero() {
       <div
         className="pointer-events-none absolute top-[430px] left-1/2 z-0 h-[700px] w-[min(1560px,112vw)] -translate-x-1/2 overflow-hidden select-none"
       >
-        <Image
-          src="/landing/hero-branch.png"
-          alt=""
-          fill
-          className="object-cover opacity-[.88] mix-blend-multiply"
+        <video
+          ref={videoRef}
+          className="hero-image absolute inset-0 h-full w-full object-cover"
           style={{
-            WebkitMaskImage: "radial-gradient(120% 100% at 50% 55%, #000 34%, transparent 78%)",
-            maskImage: "radial-gradient(120% 100% at 50% 55%, #000 34%, transparent 78%)",
+            objectPosition: "62% 45%",
+            WebkitMaskImage: "radial-gradient(140% 100% at 50% 60%, #000 48%, transparent 94%)",
+            maskImage: "radial-gradient(140% 100% at 50% 60%, #000 48%, transparent 94%)",
           }}
-          priority
-        />
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(to bottom, #f0eff3 0%, rgba(240,239,243,.55) 16%, rgba(240,239,243,0) 38%, rgba(240,239,243,.75) 88%, #f0eff3 100%)",
-          }}
-        />
+          poster="/landing/hero-chameleon.jpg"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          aria-hidden
+        >
+          <source src="/landing/hero-chameleon.mp4" type="video/mp4" />
+        </video>
       </div>
 
-      <div className="relative z-[1] flex items-center gap-[9px] rounded-full bg-[#fdfdfe] py-[7px] pr-[15px] pl-[11px] text-[12.5px] tracking-[-.01em] text-[#56545e] shadow-[0_1px_2px_rgba(17,16,20,.05)]">
-        <span className="h-[7px] w-[7px] rounded-full bg-[oklch(0.72_0.15_150)]" />
-        A quieter kind of personalization
-      </div>
-
-      <h1 className="relative z-[1] mt-[52px] max-w-[1220px] text-[clamp(56px,8.6vw,138px)] leading-[.9] font-bold tracking-[-.055em] text-balance">
+      {/* No eyebrow above the headline — it opens the page */}
+      <h1
+        className="hero-in relative z-[1] max-w-[1220px] text-[clamp(56px,8.6vw,138px)] leading-[.9] font-medium tracking-[-.055em] text-balance text-white"
+        style={{
+          animationDelay: "0ms",
+          textShadow: "0 1px 2px rgba(0,0,0,.9), 0 2px 10px rgba(0,0,0,.8), 0 10px 46px rgba(0,0,0,.6)",
+        }}
+      >
         Grows into
         <br />
-        <span className="text-[#9d9ba4]">whoever arrives.</span>
+        <span className="text-white/70">whoever arrives.</span>
       </h1>
 
-      <p className="relative z-[1] mt-11 max-w-[600px] text-[clamp(19px,2vw,25px)] leading-[1.38] tracking-[-.025em] text-[#56545e] text-pretty">
+      <p
+        className="hero-in relative z-[1] mt-11 max-w-[600px] text-[clamp(19px,2vw,25px)] leading-[1.38] tracking-[-.025em] text-white/85 text-pretty"
+        style={{
+          animationDelay: "90ms",
+          textShadow: "0 1px 2px rgba(0,0,0,.9), 0 2px 8px rgba(0,0,0,.8), 0 8px 34px rgba(0,0,0,.65)",
+        }}
+      >
         Your site stays exactly as you built it. What it says just finds its way to the person
         reading.
       </p>
 
-      <div className="relative z-[1] mt-11 flex items-center gap-3">
+      <div className="hero-in relative z-[1] mt-11 flex items-center gap-3" style={{ animationDelay: "180ms" }}>
         <a
           href="#cta"
-          className="rounded-full bg-[#111014] px-8 py-[18px] text-base font-bold tracking-[-.02em] text-[#fdfdfe] no-underline transition-colors hover:bg-[#2c2a33]"
+          className="pill-invert inline-flex items-center gap-1.5 rounded-[999px] border border-white bg-white px-8 py-[18px] text-base font-medium tracking-[-.02em] text-[var(--lp-text)] no-underline hover:bg-transparent hover:text-white"
         >
-          Get started
+          Get started <span aria-hidden>→</span>
         </a>
         <a
           href="#demo"
-          className="rounded-full bg-[#e3e2e8] px-8 py-[18px] text-base font-bold tracking-[-.02em] text-[#111014] no-underline transition-colors hover:bg-[#dad9e0]"
+          className="pill-invert inline-flex items-center gap-1.5 rounded-[999px] border border-white bg-transparent px-8 py-[18px] text-base font-medium tracking-[-.02em] text-white no-underline hover:bg-white hover:text-[var(--lp-text)]"
         >
-          See it in motion
+          See it in motion <span aria-hidden>→</span>
         </a>
       </div>
 
-      <div className="relative z-[2] mt-[118px] flex gap-1.5 rounded-full bg-[#e6e5eb] p-[5px]">
+      <div className="relative z-[2] mt-[118px] flex gap-1.5 rounded-[999px] border border-white/25 bg-white/20 p-[5px] backdrop-blur-[20px]">
         {TABS.map((label, i) => (
           <button
             key={label}
             onClick={() => setTab(i)}
-            className="cursor-pointer rounded-full px-5 py-2.5 text-sm font-bold tracking-[-.02em]"
-            style={{ background: tab === i ? "#fdfdfe" : "transparent", color: tab === i ? "#111014" : "#7c7a85" }}
+            className="cursor-pointer rounded-[999px] px-5 py-2.5 text-sm font-medium tracking-[-.02em] transition-colors duration-300"
+            style={{ background: tab === i ? "#ffffff" : "transparent", color: tab === i ? "var(--lp-text)" : "#ffffff" }}
           >
             {label}
           </button>
         ))}
       </div>
 
-      <div className="mt-[34px] w-full max-w-[1560px] lg:[perspective:1900px]">
+      {/* Product-UI mockup: kept in its own light theme, like a real screenshot of the dashboard */}
+      <div className="mt-[34px] w-full max-w-[1560px] text-[#111014] lg:[perspective:1900px]">
         <div
           className="grid grid-cols-1 items-end gap-[26px] lg:grid-cols-[1fr_1.55fr_1fr] lg:origin-top lg:[transform:rotateX(16deg)_scale(1.02)]"
         >
           {/* Audiences panel */}
           <div
             className="min-h-[420px] rounded-t-2xl bg-[#e9e8ee] p-4"
-            style={{ boxShadow: "0 -1px 0 rgba(253,253,254,.9) inset, 0 30px 60px -40px rgba(17,16,20,.5)" }}
+            style={{ boxShadow: "0 -1px 0 rgba(253,253,254,.9) inset, 0 30px 60px -40px rgba(0,0,0,.55)" }}
           >
             <div className="mb-3 text-[13px] font-extrabold italic tracking-[-.02em]">Audiences</div>
             <div className="mb-3.5 flex rounded-[10px] bg-[#dddce3] p-[3px]">
@@ -173,7 +198,7 @@ export function LandingHero() {
           {/* Center dynamic panel */}
           <div
             className="min-h-[520px] rounded-t-[18px] bg-[#ececf1] p-[18px] text-left"
-            style={{ boxShadow: "0 40px 80px -50px rgba(17,16,20,.55)" }}
+            style={{ boxShadow: "0 40px 80px -50px rgba(0,0,0,.6)" }}
           >
             <div className="mb-3.5 flex items-baseline gap-2.5">
               <div className="text-sm font-extrabold tracking-[-.03em]">{panel.title}</div>
@@ -207,7 +232,7 @@ export function LandingHero() {
           {/* Live changes panel */}
           <div
             className="min-h-[400px] rounded-t-2xl bg-[#e9e8ee] p-4"
-            style={{ boxShadow: "0 30px 60px -40px rgba(17,16,20,.5)" }}
+            style={{ boxShadow: "0 30px 60px -40px rgba(0,0,0,.55)" }}
           >
             <div className="mb-3 text-[13px] font-extrabold italic tracking-[-.02em]">Live changes</div>
             <div className="grid gap-2.5">
@@ -220,7 +245,7 @@ export function LandingHero() {
               ))}
               <div className="flex items-center justify-between rounded-[10px] bg-[#fdfdfe] p-[13px]">
                 <span className="text-[12.5px] font-bold">Approve all</span>
-                <span className="relative h-5 w-[34px] rounded-full bg-[oklch(0.72_0.15_150)]">
+                <span className="relative h-5 w-[34px] rounded-full bg-[var(--lp-honey)]">
                   <span className="absolute top-[3px] right-[3px] h-3.5 w-3.5 rounded-full bg-[#fdfdfe]" />
                 </span>
               </div>

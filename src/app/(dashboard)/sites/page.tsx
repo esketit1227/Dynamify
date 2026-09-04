@@ -18,7 +18,7 @@ export default async function SitesPage() {
     <>
       <PageHeader
         title="Sites"
-        description="Connect your existing website — we read it, understand it, and (soon) personalize it in place."
+        description="Connect your existing website — we read it, understand it, and personalize it in place."
       />
 
       <div className="mb-6">

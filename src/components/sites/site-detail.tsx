@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { HoldbackPercentInput } from "@/components/sites/holdback-percent-input"
 import { AutoApproveToggle } from "@/components/sites/auto-approve-toggle";
 import type { SiteDetailDTO, CrawledPageDTO } from "@/lib/sites/dto";
 import type { AudienceDTO } from "@/lib/audiences/dto";
+import { elementTypeLabel, sectionLabel } from "@/lib/format/labels";
 
 const IN_PROGRESS_STATUSES = new Set(["PENDING", "CRAWLING", "UNDERSTANDING"]);
 
@@ -70,13 +72,13 @@ function SectionGroup({
   return (
     <div className="mb-3 last:mb-0">
       <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
-        {section} <span className="normal-case text-muted/70">· {elements.length}</span>
+        {sectionLabel(section)} <span className="normal-case text-muted/70">· {elements.length}</span>
       </p>
       <ul className="flex flex-col gap-2">
         {visible.map((el) => (
           <li key={el.id} className="text-sm text-foreground">
             <p className="truncate">
-              <span className="text-xs text-muted">{el.elementType}:</span> {el.currentContent}
+              <span className="text-xs text-muted">{elementTypeLabel(el.elementType)}:</span> {el.currentContent}
             </p>
             <ElementPersonalize
               organizationId={organizationId}
@@ -165,7 +167,7 @@ export function SiteDetail({
   organizationId,
   siteId,
   initialSite,
-  audiences,
+  audiences: initialAudiences,
   origin,
 }: {
   organizationId: string;
@@ -176,6 +178,7 @@ export function SiteDetail({
 }) {
   const router = useRouter();
   const [site, setSite] = useState(initialSite);
+  const [audiences, setAudiences] = useState(initialAudiences);
   const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
@@ -186,6 +189,31 @@ export function SiteDetail({
       if (!res.ok) return;
       const data = await res.json();
       setSite(data.site);
+
+      // The crawl finishing is also the moment cold-start default
+      // audiences get seeded server-side — but seedDefaultAudiences runs
+      // as a separate, deliberately-isolated step *after* the site's own
+      // status flips to READY (service.ts: "a failure seeding starter
+      // audiences must never turn a successful connection into a FAILED
+      // one"), so there's a real window where READY is visible before
+      // seeding has actually landed. `audiences` was only ever passed in
+      // from the page's initial server render (taken before any of this
+      // happened), and now that "Turn on personalization" depends on it
+      // being accurate, a plain one-shot refetch can still lose that race
+      // and show "create an audience" for a site that already has three.
+      // One bounded retry (not an open-ended poll) covers the real gap —
+      // seeding is a handful of sequential inserts, not indefinite work.
+      if (!IN_PROGRESS_STATUSES.has(data.site.status)) {
+        const fetchAudiences = () => fetch(`/api/organizations/${organizationId}/audiences`);
+        let audiencesRes = await fetchAudiences();
+        let fetched = audiencesRes.ok ? ((await audiencesRes.json()).audiences as AudienceDTO[]) : [];
+        if (fetched.length === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          audiencesRes = await fetchAudiences();
+          fetched = audiencesRes.ok ? ((await audiencesRes.json()).audiences as AudienceDTO[]) : fetched;
+        }
+        setAudiences(fetched);
+      }
     }, 2000);
 
     return () => clearInterval(interval);
@@ -231,47 +259,24 @@ export function SiteDetail({
 
   const understanding = site.understanding;
   const library = buildLibrary(site.pages.map((p) => p.elements));
+  const imageCount = site.pages.reduce(
+    (sum, p) => sum + p.elements.filter((el) => el.elementType === "IMAGE" || el.elementType === "LOGO").length,
+    0,
+  );
 
+  // Ordered to match docs/product-spec.md §15's onboarding narrative — the
+  // report (what we found) leads, since that's the payoff for the wait;
+  // "optional" data sources and personalization behavior are grouped and
+  // labeled as their own steps rather than five unlabeled settings cards
+  // in installation order, which is what this looked like before
+  // (docs/launch-plan.md §5B — verification-and-polish, not new build,
+  // since every one of these already existed).
   return (
     <div className="flex flex-col gap-6">
-      <div className="rounded-2xl border border-border bg-surface p-4">
-        <p className="text-sm font-medium text-foreground">{site.url}</p>
-        <p className="mt-1 text-xs text-muted">
-          We found {site.pageCount} {site.pageCount === 1 ? "page" : "pages"} and {site.elementCount}{" "}
-          editable content elements.
-        </p>
-      </div>
-
-      <EmbedSnippet siteId={site.id} origin={origin} />
-
-      <IpEnrichmentToggle
-        organizationId={organizationId}
-        siteId={site.id}
-        initialEnabled={site.ipEnrichmentEnabled}
-      />
-
-      <VisitorTrackingToggle
-        organizationId={organizationId}
-        siteId={site.id}
-        initialEnabled={site.visitorTrackingEnabled}
-      />
-
-      <HoldbackPercentInput
-        organizationId={organizationId}
-        siteId={site.id}
-        initialPercent={site.holdbackPercent}
-      />
-
-      <AutoApproveToggle
-        organizationId={organizationId}
-        siteId={site.id}
-        initialEnabled={site.autoApproveAiContent}
-      />
-
       {understanding ? (
         <div className="rounded-2xl border border-border bg-surface p-5">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground">Website understanding</h2>
+            <h2 className="text-sm font-semibold text-foreground">Here&apos;s what we found</h2>
             <span
               className={`rounded-full border px-2 py-0.5 text-xs ${
                 understanding.method === "AI"
@@ -287,14 +292,15 @@ export function SiteDetail({
               {understanding.method === "AI" ? "AI-generated" : "Rule-based"}
             </span>
           </div>
-          <dl className="flex flex-col gap-3 text-sm">
+          <p className="text-sm text-foreground">
+            We found {site.pageCount} {site.pageCount === 1 ? "page" : "pages"}, {site.elementCount} editable
+            content elements{imageCount > 0 ? `, and ${imageCount} ${imageCount === 1 ? "image" : "images"}` : ""}.
+            Your positioning appears to be: <span className="font-medium">{understanding.productSummary}</span>
+          </p>
+          <dl className="mt-4 flex flex-col gap-3 text-sm">
             <div>
               <dt className="text-xs font-medium text-muted">Company</dt>
               <dd className="text-foreground">{understanding.companySummary}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-muted">Product</dt>
-              <dd className="text-foreground">{understanding.productSummary}</dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-muted">Target customers</dt>
@@ -320,17 +326,69 @@ export function SiteDetail({
             ) : null}
           </dl>
         </div>
-      ) : null}
+      ) : (
+        <div className="rounded-2xl border border-border bg-surface p-4">
+          <p className="text-sm font-medium text-foreground">{site.url}</p>
+          <p className="mt-1 text-xs text-muted">
+            We found {site.pageCount} {site.pageCount === 1 ? "page" : "pages"} and {site.elementCount}{" "}
+            editable content elements.
+          </p>
+        </div>
+      )}
+
+      <EmbedSnippet siteId={site.id} origin={origin} />
 
       <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-foreground">Content by page</h2>
-          {audiences.length === 0 ? (
-            <p className="text-xs text-muted">
-              Create an audience to start personalizing elements below.
-            </p>
-          ) : null}
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Connect data sources (optional)</h2>
+        <div className="flex flex-col gap-4">
+          <IpEnrichmentToggle
+            organizationId={organizationId}
+            siteId={site.id}
+            initialEnabled={site.ipEnrichmentEnabled}
+          />
+          <VisitorTrackingToggle
+            organizationId={organizationId}
+            siteId={site.id}
+            initialEnabled={site.visitorTrackingEnabled}
+          />
         </div>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Turn on personalization</h2>
+        {audiences.length > 0 ? (
+          <p className="mb-4 text-xs text-muted">
+            {audiences.length} starter {audiences.length === 1 ? "audience is" : "audiences are"} already set up
+            for this site.{" "}
+            <Link href="/recommendations" className="font-medium text-foreground underline underline-offset-2">
+              Check Recommendations
+            </Link>{" "}
+            for opportunities, or personalize an element directly below.
+          </p>
+        ) : (
+          <p className="mb-4 text-xs text-muted">
+            <Link href="/audiences" className="font-medium text-foreground underline underline-offset-2">
+              Create an audience
+            </Link>{" "}
+            to start personalizing elements below.
+          </p>
+        )}
+        <div className="flex flex-col gap-4">
+          <HoldbackPercentInput
+            organizationId={organizationId}
+            siteId={site.id}
+            initialPercent={site.holdbackPercent}
+          />
+          <AutoApproveToggle
+            organizationId={organizationId}
+            siteId={site.id}
+            initialEnabled={site.autoApproveAiContent}
+          />
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Content by page</h2>
         <div className="flex flex-col gap-3">
           {site.pages.map((page) => (
             <PageCard

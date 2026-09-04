@@ -1511,3 +1511,226 @@ dev server, and once against a mock returning a real 500 confirming the
 failure path degrades exactly as designed — the client still gets the
 same 200, the failure is logged, and neither the token nor the email
 address appear in that log line.
+
+### 2026-09-03 — Real Anthropic key exercised for the first time; two live-generation bugs found and fixed
+
+Requested directly: test the configured `ANTHROPIC_API_KEY` with a real
+call, then run full AI-driven optimization against a real connected site
+(elevenlabs.io, 14 pages, seeded back in Phase 1/6 against the honest
+heuristic fallback since no real key existed in this environment until
+now). The raw API call worked; the full `generateExperience` pipeline
+did not — every one of 40 generated pieces on the homepage silently fell
+back to `HEURISTIC`, never `AI`.
+
+**Root cause 1**: `generateCoordinatedCopy`'s `max_tokens: 2048`
+(`src/lib/sites/generateExperience.ts`) is far too small for a batch
+covering up to `MAX_ELEMENTS_PER_GENERATION` (40) elements including full
+`BODY` paragraphs. A real 39-element page hit `stop_reason: "max_tokens"`,
+truncating the tool-call JSON mid-object — the resulting empty `{}` failed
+`zod` parsing, threw `AiGenerationError`, and silently failed the *entire*
+batch to heuristic, not just the pieces that would've been too long.
+Raised to 16000, sized for the batch cap rather than the typical case.
+
+**Root cause 2**: the independent fact-checker's system prompt
+(`checkWithModel`, `src/lib/sites/suggestVariant.ts`) was stricter than
+D4 (`docs/decisions.md`) actually specifies — it flagged *any* added
+wording as an unsupported claim, including pure tone ("made for you"),
+not just invented facts/names/stats. Narrowed the prompt to match D4's
+stated intent: flag invented entities/numbers/functionality claims, not
+generic personalization framing. Verified with targeted probes: tone-only
+personalization now passes; invented customers, stats, and certifications
+still correctly fail — and so do unverified functional claims like
+"optimized for mobile," which is the right conservative call absent a
+whole-corpus check.
+
+Verified live, twice: (1) isolated fact-check probes before/after the
+prompt change, confirming the exact pass/fail shift described above. (2)
+Full `generateExperience` re-run on the same real page: 0 AI / 40
+heuristic before either fix → 26 AI / 14 heuristic after both, on the
+real product code path, not a reimplementation. Then ran the complete
+pipeline against all 14 real pages of the site (543 total elements): 331
+AI-authored, 212 heuristic — approved live at the user's request.
+
+**A real regression caught and fixed along the way, not by inspection**:
+approving the full-site batch created a second, more-recently-updated
+`APPROVED` rule on an element that already had a pre-existing, hand-
+authored `MANUAL` rule for the same audience. `packages/sdk/src/resolve.ts`
+breaks priority ties by most-recently-updated (decision D5's old
+specificity-tiebreak note) — so the new heuristic rule would have quietly
+outranked and replaced the human-authored copy on the live site. Found
+by diffing the approved-rule export before publishing a review report,
+not by a test; fixed by disabling the newly-created rule via the existing
+`disableElementPersonalizationRule` path, confirmed the manual rule's
+precedence was restored. No schema or resolution-logic change — this is
+a real, general gap (nothing stops two rules targeting the same
+element+audience pair) worth a structural fix later, not just a one-off
+patch to the instance found.
+
+`pnpm typecheck && pnpm lint && pnpm test` all clean (356 tests,
+unchanged — both fixes are prompt/constant changes, not new logic paths
+requiring new tests). All throwaway verification scripts removed after
+use.
+
+### 2026-09-04 — IA/nav collapse and enum-label cleanup (docs/launch-plan.md §5A)
+
+First slice of `docs/launch-plan.md`, itself written in response to a
+direct product complaint ("clanky and unclear... should be more a
+marketing platform for CMOs") plus a request to study Dynamic Yield
+(Mastercard) and draft a pre-launch plan. That plan flagged the real
+tension up front rather than resolving it silently: "automatically
+generate personalization" is in real tension with this codebase's own
+"nothing goes live unapproved" rule and decision D5's still-open legal
+question — the plan's recommended shape (a 3-mode Auto-Optimize toggle:
+Off / Auto-draft / Auto-promote) preserves the approval gate rather than
+removing it, and is scoped as the *next* slice, not this one.
+
+This slice is the cheapest, highest-visibility fix the plan identified,
+chosen to ship first: nine flat, same-weight nav items
+(`src/components/dashboard/nav-items.ts`) collapsed into four groups
+organized around what a marketer is deciding, not the data model — Home;
+Experiences (Audiences/Recommendations/Visitors/Live View/Analytics);
+Website (Sites/Integrations); Account (Settings). Routes are unchanged —
+this is presentation grouping, not a data-layer merge, so no link,
+bookmark, or test depends on a URL moving. "Overview" relabeled "Home" to
+match the plan's language; "Recommendations" deliberately kept as-is
+(not renamed to "Opportunities") after finding its page's own `PageHeader`
+title would've gone out of sync — consistency across the label and the
+page it points to won out over a marginally clearer word.
+
+Also fixed the concrete, cited "clanky" bug: raw `ContentElementType`/
+`ContentSection` enum values (`HEADLINE`, `CTA_LABEL`, `HERO`) were
+rendering verbatim in the Sites detail page
+(`src/components/sites/site-detail.tsx`). New `src/lib/format/labels.ts`
+(`elementTypeLabel`, `sectionLabel`) maps every enum member to a human
+label, falling back to a title-cased version of the raw value for
+anything not in the map rather than crashing or rendering blank —
+swept the rest of `src/components` for the same pattern first
+(`element-personalize.tsx`'s `boundaryReason`/`ContentPreview` already
+only use the raw type for branching logic, never printing it; the
+recommendations page's stored `elementType` is never rendered either)
+so this is the one real instance, not a partial fix.
+
+`pnpm typecheck && pnpm lint && pnpm test` all clean (356 tests,
+unaffected — this is a labeling/grouping change, no new logic). Verified
+live, not just by inspection: minted a real session for a real org with
+real crawled data (the same elevenlabs.io site from the entry above), ran
+the actual dev server, and screenshotted both the sidebar (confirmed four
+groups render, breadcrumb correctly shows "Dashboard / Home") and the
+Sites detail page (confirmed "Headline:", "Subheadline:", "Button text:"
+and "Hero", "Call to action" section headers render instead of the raw
+enum forms) — screenshots and the minted session were discarded after.
+
+**Not done in this slice, by design** (see `docs/launch-plan.md` §5 B–E
+for what's next): the Auto-Optimize loop itself (the actual "automatic
+CRO" feature); merging Audiences/Recommendations/Analytics into one
+physical page rather than a shared nav group (a bigger, real-regression-
+risk rewrite deferred rather than rushed); the in-context WYSIWYG visual
+reviewer; Settings narrowing to account/billing/team only.
+
+### 2026-09-04 — Full external-user walkthrough; one real landing-page bug found and fixed
+
+Requested directly: "if I'm an external user, using the app, is it
+working" — a request to actually verify, not assume, after the IA-collapse
+slice above. Driven entirely through the real UI (signup form, connect-
+site form), never a minted session or direct DB seed, since that's the
+only way to actually answer the question asked.
+
+Confirmed working end to end: landing page → real signup → empty-state
+dashboard with the new nav → connecting a real site through the actual
+form → real crawl → real AI-generated understanding (using the configured
+`ANTHROPIC_API_KEY` for the first time on a URL with no prior seed data —
+correctly identified `example.com` as a placeholder domain with no real
+company, rather than inventing one, which is the brand-safety behavior
+the product is supposed to have).
+
+**One real bug found**: the hero video's `poster` attribute
+(`src/components/landing/landing-hero.tsx`) pointed at
+`/landing/hero-chameleon-avatar.jpg`, which doesn't exist — a 404 on
+every single landing page load. The real file is `hero-chameleon.jpg`;
+a one-line typo, fixed.
+
+**One false alarm, caught before being reported as a bug**: a first
+full-page screenshot showed a multi-thousand-pixel blank gap between the
+hero and the next section. Traced it to how the page reveals content —
+`Reveal` (`src/components/landing/reveal.tsx`) fades sections in via
+`IntersectionObserver` as a real visitor scrolls to them — and to how a
+single-shot full-page screenshot is taken (the viewport resizes to the
+full document height in one jump, which doesn't give the observer time to
+fire before the pixels are captured). Confirmed with a second check that
+actually scrolled the page incrementally, the way a real visit builds up:
+every section reached `opacity: 1` correctly, and the "gap" was never
+present for a real user. Recorded here so the same shape of false alarm
+isn't re-litigated later — full-page screenshots of scroll-reveal pages
+need a real scroll pass first, not just `waitForLoadState`.
+
+`pnpm typecheck && pnpm lint && pnpm test` clean (356 tests, unaffected —
+a one-line asset path fix). Test user/org created during the walkthrough
+removed from the dev DB afterward.
+
+### 2026-09-04 — Onboarding rebuilt against product-spec.md §15 (docs/launch-plan.md §5B)
+
+Requested directly: "build the onboarding the spec." `docs/product-spec.md`
+§15 describes five steps — URL → scan progress → understanding report →
+optional data sources → enable personalization — and every one of them
+already existed in some form (Phase 1's crawl/understanding, Phase 5/
+Hardening's cold-start audiences and recommendations). The gap was
+sequencing and framing, not missing capability, confirmed by reading the
+actual render order in `site-detail.tsx` before changing anything: the
+AI-generated understanding report (step 3) rendered *seventh*, after four
+unrelated settings toggles (embed snippet, IP enrichment, visitor
+tracking, holdback, auto-approve) a brand-new user has no context for yet.
+
+**Restructured, not rebuilt**, matching the plan's own "verification-and-
+polish" framing for this slice:
+1. The report now leads — merged the basic page/element count with the
+   full company/product/target-customers/value-props card into one
+   "Here's what we found" block, phrased close to the spec's own example
+   ("We found N pages, M elements, and K images. Your positioning appears
+   to be..."). Added the image count via a client-side reduce over
+   `site.pages[].elements` already in the DTO — no schema or query change.
+2. "Install on your site" follows immediately — the real mechanism (D1's
+   embed script) behind the spec's implied "make it live."
+3. IP enrichment + visitor tracking grouped and labeled "Connect data
+   sources (optional)," matching the spec's step 4 framing exactly.
+4. Holdback + auto-approve grouped under "Turn on personalization" (step
+   5), paired with an honest, accurate next action instead of a fake
+   toggle — full automatic deployment isn't built (`docs/launch-plan.md`
+   §5C, intentionally out of this slice) — linking to Recommendations
+   when audiences already exist, or to Audiences when none do.
+5. Sites list page's stale "(soon) personalize it in place" corrected —
+   personalization has been live since Phase 3.
+
+**A real staleness bug found and fixed while building step 4, not by
+inspection**: cold-start default audiences are seeded server-side
+(`seedDefaultAudiences`) as a step deliberately *separate from and after*
+the site's own status flipping to `READY` — the existing code comment
+already explains why ("a failure seeding starter audiences must never
+turn a successful connection into a FAILED one"). `SiteDetail`'s
+`audiences` prop, however, was only ever captured once at the page's
+initial server render, before either event — harmless before this slice
+(nothing depended on it being fresh), load-bearing now that step 5's
+message explicitly claims "N starter audiences are already set up."
+Live-verified the exact failure first: 3 of 5 real test signups showed
+"Create an audience" on a site whose org actually already had 3 audiences
+in the database, confirmed by direct query. Root cause was a genuine race,
+not a typo — the audiences refetch (added alongside the site-status poll)
+could still land in the real gap between `READY` and the seeding step
+completing. Fixed with one bounded retry (re-fetch once more after 1.5s
+if the first comes back empty) rather than an open-ended poll, since
+seeding is a handful of sequential inserts, not indefinite work — verified
+live again afterward, correctly showing "3 starter audiences are already
+set up for this site."
+
+`pnpm typecheck && pnpm lint && pnpm test` clean (356 tests, unaffected —
+UI restructuring and a client-side refetch, no new business logic worth a
+unit test). Verified live end-to-end twice more after the fixes, once
+through a real (now rate-limited by the auth endpoint's own per-email
+limit after this session's repeated test signups — confirmed working as
+designed, not a bug) signup, and once via a minted session against an
+existing test org with no site yet, both through the real connect-site
+form. All test users/orgs/sites created during verification removed from
+the dev DB afterward.
+
+**Not done in this slice** (see `docs/launch-plan.md` §5C): the
+Auto-Optimize loop / real "enable personalization" automation — the step
+5 CTA is an honest link to existing manual flows, not new automation.

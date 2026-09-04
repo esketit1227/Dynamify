@@ -77,14 +77,14 @@ export function LandingDemo() {
       <div className="mx-auto max-w-[1180px]">
         <div className="flex flex-wrap items-end justify-between gap-10">
           <div>
-            <div className="text-[11.5px] font-bold tracking-[-.01em] text-[#9d9ba4]">A look</div>
+            <div className="text-[11.5px] font-bold tracking-[-.01em] text-[#83808c]">A look</div>
             <h2 className="mt-4 max-w-[640px] text-[clamp(38px,5vw,68px)] leading-[.98] font-bold tracking-[-.05em] text-balance">
               One page.
               <br />
-              <span className="text-[#9d9ba4]">Many readings.</span>
+              <span className="text-[#6b6875]">Many readings.</span>
             </h2>
           </div>
-          <p className="m-0 max-w-[380px] text-[17px] leading-[1.5] tracking-[-.02em] text-[#7c7a85] text-pretty">
+          <p className="m-0 max-w-[380px] text-[17px] leading-[1.5] tracking-[-.02em] text-[#a5a2ae] text-pretty">
             Move between audiences and watch a familiar page settle into a different tone. Nothing
             about the design shifts.
           </p>
@@ -96,7 +96,7 @@ export function LandingDemo() {
               key={audience.label}
               onClick={() => setAud(i)}
               className="cursor-pointer rounded-full px-[22px] py-3 text-[14.5px] font-bold tracking-[-.02em]"
-              style={{ background: aud === i ? "#111014" : "#e3e2e8", color: aud === i ? "#fdfdfe" : "#56545e" }}
+              style={{ background: aud === i ? "#f5f4f7" : "#29262e", color: aud === i ? "#121116" : "#a5a2ae" }}
             >
               {audience.label}
             </button>
@@ -104,7 +104,8 @@ export function LandingDemo() {
         </div>
 
         <div className="mt-[22px] grid grid-cols-1 items-stretch gap-[22px] lg:grid-cols-[1.45fr_1fr]">
-          <div className="rounded-[22px] bg-[#fdfdfe] shadow-[0_1px_2px_rgba(17,16,20,.05),0_40px_80px_-60px_rgba(17,16,20,.5)]">
+          {/* Product-UI mockup: kept in its own light theme, like a real screenshot of the customer's site */}
+          <div className="rounded-[22px] bg-[#fdfdfe] text-[#111014] shadow-[0_20px_50px_-30px_rgba(0,0,0,.6)]">
             <div className="flex items-center gap-2 border-b border-[#edecf1] px-[18px] py-3.5">
               <span className="h-[9px] w-[9px] rounded-full bg-[#e0dfe6]" />
               <span className="h-[9px] w-[9px] rounded-full bg-[#e0dfe6]" />
@@ -132,35 +133,35 @@ export function LandingDemo() {
           </div>
 
           <div className="grid content-start gap-[22px]">
-            <div className="rounded-[22px] bg-[#111014] p-[26px] text-[#fdfdfe]">
-              <div className="text-[11px] font-bold tracking-[-.01em] text-[#8e8c97]">Why this changed</div>
+            <div className="rounded-[22px] bg-[#f5f4f7] p-[26px] text-[#121116]">
+              <div className="text-[11px] font-bold tracking-[-.01em] text-[#6b6975]">Why this changed</div>
               <div className="mt-5 grid gap-4">
                 {a.rows.map(([k, v]) => (
                   <div key={k}>
-                    <div className="mb-[5px] text-[11.5px] text-[#8e8c97]">{k}</div>
-                    <div className="text-[15px] leading-[1.35] font-semibold tracking-[-.02em] text-[#fdfdfe]">{v}</div>
+                    <div className="mb-[5px] text-[11.5px] text-[#6b6975]">{k}</div>
+                    <div className="text-[15px] leading-[1.35] font-semibold tracking-[-.02em] text-[#121116]">{v}</div>
                   </div>
                 ))}
               </div>
               <div className="mt-[26px] flex gap-2">
-                <span className="rounded-full bg-[#fdfdfe] px-[18px] py-2.5 text-[13px] font-bold text-[#111014]">
+                <span className="rounded-full bg-[#121116] px-[18px] py-2.5 text-[13px] font-bold text-[#f5f4f7]">
                   Approve
                 </span>
-                <span className="rounded-full bg-[#2c2a33] px-[18px] py-2.5 text-[13px] font-bold text-[#d8d7de]">
+                <span className="rounded-full bg-[#e3e2e8] px-[18px] py-2.5 text-[13px] font-bold text-[#56545e]">
                   Edit
                 </span>
-                <span className="rounded-full bg-[#2c2a33] px-[18px] py-2.5 text-[13px] font-bold text-[#d8d7de]">
+                <span className="rounded-full bg-[#e3e2e8] px-[18px] py-2.5 text-[13px] font-bold text-[#56545e]">
                   Disable
                 </span>
               </div>
             </div>
-            <div className="rounded-[22px] bg-[#fdfdfe] p-[26px] shadow-[0_1px_2px_rgba(17,16,20,.05)]">
-              <div className="text-[11px] font-bold tracking-[-.01em] text-[#9d9ba4]">Never touched</div>
+            <div className="rounded-[22px] bg-[#1b1a20] p-[26px] ring-1 ring-[#2a2830]">
+              <div className="text-[11px] font-bold tracking-[-.01em] text-[#83808c]">Never touched</div>
               <div className="mt-4 flex flex-wrap gap-[7px]">
                 {LOCKED.map((l) => (
                   <span
                     key={l}
-                    className="rounded-full bg-[#f2f1f5] px-[13px] py-2 text-[12.5px] font-semibold tracking-[-.015em] text-[#56545e]"
+                    className="rounded-full bg-[#29262e] px-[13px] py-2 text-[12.5px] font-semibold tracking-[-.015em] text-[#c2bfcb]"
                   >
                     {l}
                   </span>

@@ -173,7 +173,13 @@ async function generateCoordinatedCopy(
 
   const response = await client.messages.create({
     model: AI_MODEL,
-    max_tokens: 2048,
+    // Up to MAX_ELEMENTS_PER_GENERATION (40) pieces come back in one response,
+    // including full BODY paragraphs — a real page with 39 textual elements
+    // hit stop_reason: "max_tokens" at the previous 2048 budget, truncating
+    // the tool call mid-JSON and silently failing every element in the batch
+    // (empty aiPieces -> every element falls back to HEURISTIC). Sized for
+    // the batch cap, not the typical case.
+    max_tokens: 16000,
     system:
       "You rewrite a coordinated set of website copy pieces for one visitor segment, so the " +
       "headline, subheadline, CTA, and any other pieces all tell the same consistent story " +

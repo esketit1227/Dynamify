@@ -1,4 +1,132 @@
+.landing-page {
+  /* Palette */
+  --lp-bg: #fbf8f4;
+  --lp-surface: #ffffff;
+  --lp-surface-alt: #f3eee6;
+  --lp-text: #141210;
+  --lp-text-secondary: rgba(20, 18, 16, 0.7);
+  --lp-text-muted: rgba(20, 18, 16, 0.5);
+  --lp-honey: #f2b01e;
+  --lp-blue: #3b4de8;
+  --lp-hairline: rgba(20, 18, 16, 0.1);
+
+  /* Shape: exactly two radius values on the whole page */
+  --lp-radius-pill: 999px;
+  --lp-radius-card: 20px;
+
+  /* Motion */
+  --lp-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .landing-page ::selection {
-  background: #111014;
-  color: #f0eff3;
+  background: var(--lp-blue);
+  color: var(--lp-bg);
+}
+
+/* Hero entrance: each element fades/slides up on mount, staggered via animation-delay */
+.hero-in {
+  animation: hero-fade-up 0.85s var(--lp-ease) both;
+}
+
+@keyframes hero-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Hero image: slow ambient drift, purely decorative */
+.hero-image {
+  animation: hero-image-drift 22s ease-in-out infinite alternate;
+}
+
+@keyframes hero-image-drift {
+  from {
+    transform: scale(1) translateY(0);
+  }
+  to {
+    transform: scale(1.045) translateY(-10px);
+  }
+}
+
+/* Scroll reveal: driven by the Reveal component toggling .reveal-visible */
+.reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition:
+    opacity 0.7s var(--lp-ease),
+    transform 0.7s var(--lp-ease);
+  will-change: opacity, transform;
+}
+
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Pills invert fill on hover; the label never moves */
+.pill-invert {
+  transition: background-color 0.3s var(--lp-ease), color 0.3s var(--lp-ease), border-color 0.3s var(--lp-ease);
+}
+
+/* Underline that draws in from the left on hover */
+.link-underline {
+  position: relative;
+  text-decoration: none;
+}
+.link-underline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100%;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s var(--lp-ease);
+}
+.link-underline:hover::after {
+  transform: scaleX(1);
+}
+
+/* Cards lift on hover: transform + shadow only, never top/left/width/height */
+.card-lift {
+  transition: transform 0.3s var(--lp-ease), box-shadow 0.3s var(--lp-ease);
+}
+.card-lift:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 20px 40px -12px rgba(20, 18, 16, 0.18);
+}
+
+/* Row hover tint for the capability list */
+.row-tint {
+  transition: background-color 0.3s var(--lp-ease);
+}
+.row-tint:hover {
+  background-color: var(--lp-surface-alt);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .hero-image {
+    animation: none;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .card-lift,
+  .card-lift:hover {
+    transform: none;
+  }
 }
