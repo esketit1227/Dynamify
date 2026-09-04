@@ -5,7 +5,7 @@ import { assertSafeExternalUrl, UnsafeUrlError } from "@/lib/security/ssrfGuard"
 import { crawlSite, CrawlError, type CrawledPageResult } from "@/lib/sites/crawler";
 import { understandSite, type WebsiteUnderstandingResult } from "@/lib/sites/understand";
 import { classifyPageElements, buildHeuristicUnderstanding, deriveElementContent } from "@/lib/sites/autoClassify";
-import { AiGenerationError } from "@/lib/ai/errors";
+import { AiGenerationError, AiNotConfiguredError } from "@/lib/ai/errors";
 import { toSiteDTO, toSiteDetailDTO, type SiteDTO, type SiteDetailDTO } from "@/lib/sites/dto";
 import { seedDefaultAudiences } from "@/lib/audiences/service";
 import type { Prisma, ContentSection, ContentElementType, UnderstandingMethod } from "@/generated/prisma/client";
@@ -205,7 +205,7 @@ async function classify(
       pages: result.pages,
       understanding: result,
     };
-  } catch {
+  } catch (error) {
     // Falls back to the rule-based classifier on ANY understanding failure —
     // not configured, a bad/expired key, no credit balance, a rate limit, a
     // transient network error, or a malformed model response
@@ -213,6 +213,18 @@ async function classify(
     // your site" must work for every account, not just one where the AI
     // call happens to succeed today. See docs/decisions.md and
     // autoClassify.ts for what this mode does and doesn't claim to know.
+    //
+    // The *reason* is still worth logging server-side, though — a bare
+    // `catch {}` here meant "not configured" and "the key is invalid/
+    // rate-limited/erroring" were indistinguishable from the outside, which
+    // is exactly the wrong thing to be blind to when debugging why AI
+    // understanding isn't running in an environment that's supposed to
+    // have a real key set.
+    if (error instanceof AiNotConfiguredError) {
+      console.warn("AI understanding skipped: ANTHROPIC_API_KEY is not set in this environment.");
+    } else {
+      console.error("AI understanding failed, falling back to rule-based classification:", error);
+    }
     const classifiedByPageId = new Map(
       crawl.pages.map((page) => [page.url, classifyPageElements(page.url, page.elements)]),
     );
