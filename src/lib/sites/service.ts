@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/auth/errors";
 import { assertSafeExternalUrl, UnsafeUrlError } from "@/lib/security/ssrfGuard";
@@ -148,16 +149,24 @@ export async function createSite(organizationId: string, url: string): Promise<S
 
   const site = await prisma.site.create({ data: { organizationId, url } });
 
-  // Fire-and-forget: crawling + understanding takes real wall-clock time
-  // (up to ~60s crawl + an AI call), so this can't run inside the request
-  // that created the Site. The route returns immediately; the client polls
-  // GET .../sites/[id] for status, same shape as the rest of this codebase's
-  // fire-and-forget work (webhook dispatch).
-  void runCrawlAndUnderstand(site.id).catch(() => {
-    // runCrawlAndUnderstand catches and persists its own failures — this
-    // catch only guards against something going wrong in that handling
-    // itself, so a bug there can't produce an unhandled rejection.
-  });
+  // Crawling + understanding takes real wall-clock time (up to ~60s crawl
+  // + an AI call), so this can't run inside the request that created the
+  // Site — the route returns immediately; the client polls GET
+  // .../sites/[id] for status. A bare `void` fire-and-forget worked on a
+  // persistent `next dev`/`next start` process but is a real bug on
+  // Vercel's serverless functions: the runtime can freeze the invocation
+  // the moment the HTTP response is sent, cutting this off mid-crawl
+  // rather than actually running it in the background. `after()` is
+  // Next.js's portable fix for exactly this — it tells the platform to
+  // keep the invocation alive until the callback settles, and is a no-op
+  // wrapper (still just runs after the response) on a persistent server.
+  after(() =>
+    runCrawlAndUnderstand(site.id).catch(() => {
+      // runCrawlAndUnderstand catches and persists its own failures — this
+      // catch only guards against something going wrong in that handling
+      // itself, so a bug there can't produce an unhandled rejection.
+    }),
+  );
 
   return toSiteDTO(site);
 }

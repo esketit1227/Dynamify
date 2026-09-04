@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
 import { getSite, runCrawlAndUnderstand } from "@/lib/sites/service";
 import { rateLimit } from "@/lib/auth/rateLimit";
@@ -27,7 +27,9 @@ export async function POST(
       where: { id: siteId },
       data: { status: "PENDING", errorMessage: null },
     });
-    void runCrawlAndUnderstand(siteId).catch(() => {});
+    // Same serverless-teardown fix as createSite() (src/lib/sites/service.ts)
+    // — a bare `void` fire-and-forget can be cut off mid-crawl on Vercel.
+    after(() => runCrawlAndUnderstand(siteId).catch(() => {}));
 
     return NextResponse.json({ ok: true });
   } catch (error) {
