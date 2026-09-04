@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const envSchema = z.object({
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  DATABASE_URL: z.string({ error: "DATABASE_URL is required" }).min(1, "DATABASE_URL is required"),
   TEST_DATABASE_URL: z.string().min(1).optional(),
   SESSION_COOKIE_NAME: z.string().min(1).default("dynamify_session"),
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
@@ -41,4 +41,16 @@ const envSchema = z.object({
     .default("development"),
 });
 
-export const env = envSchema.parse(process.env);
+// Vercel's dashboard (and some integrations) can leave an unset optional
+// var as an empty string rather than actually omitting the key — that's
+// indistinguishable from "not configured" for every one of these, so
+// treat it that way instead of letting `.min(1)` turn a blank field into
+// a hard crash across every route at build time. Every optional var here
+// already has a real "gracefully degrade when unconfigured" path
+// (AiNotConfiguredError, EmailNotConfiguredError, etc.) — this just makes
+// sure that path is actually reachable instead of never parsing at all.
+const rawEnv = Object.fromEntries(
+  Object.entries(process.env).map(([key, value]) => [key, value === "" ? undefined : value]),
+);
+
+export const env = envSchema.parse(rawEnv);
