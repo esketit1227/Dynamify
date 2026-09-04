@@ -6,6 +6,14 @@ import { rateLimit } from "@/lib/auth/rateLimit";
 import { RateLimitedError } from "@/lib/auth/errors";
 import { toErrorResponse } from "@/lib/api/respond";
 
+// createSite() kicks off a real crawl (up to ~60s, per its own comment) +
+// an AI understanding call via after() — Vercel's platform default
+// function timeout (10s on Hobby) is far shorter than that regardless of
+// after(), which only keeps the invocation alive past the response, not
+// past its own duration limit. Without this, a real multi-page site gets
+// killed mid-crawl and lands on the generic FAILED message every time.
+export const maxDuration = 60;
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ organizationId: string }> },

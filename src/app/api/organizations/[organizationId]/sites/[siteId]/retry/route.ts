@@ -6,6 +6,10 @@ import { RateLimitedError } from "@/lib/auth/errors";
 import { toErrorResponse } from "@/lib/api/respond";
 import { prisma } from "@/lib/db";
 
+// Same reasoning as the sites collection route's maxDuration — retrying
+// re-runs the same up-to-~60s crawl + understanding work.
+export const maxDuration = 60;
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ organizationId: string; siteId: string }> },
