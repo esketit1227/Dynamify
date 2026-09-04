@@ -328,6 +328,15 @@ export async function runCrawlAndUnderstand(siteId: string): Promise<void> {
       await tx.site.update({ where: { id: siteId }, data: { status: "READY", errorMessage: null } });
     });
   } catch (error) {
+    // The org only ever sees the cleaned, generic message (cleanErrorMessage)
+    // — never leak internals into a field the org can see. But until now
+    // the real error was never logged anywhere either, server-side, which
+    // made this genuinely undiagnosable in production (nothing to find in
+    // Vercel's logs). Same posture as sendEmail's failure logging
+    // (src/lib/email/): clean message to the user/DB, real error to the
+    // server console. No token/credential ever flows through this path, so
+    // logging the raw error here doesn't risk leaking one.
+    console.error(`runCrawlAndUnderstand failed for site ${siteId}:`, error);
     await markFailed(siteId, cleanErrorMessage(error));
     return;
   }
