@@ -9,6 +9,7 @@ export type CurrentOrg = {
   rawEventRetentionDays: number;
   sessionRetentionDays: number;
   visitorRetentionDays: number;
+  autoOptimizeEnabled: boolean;
 };
 
 // Phase 0 scope: a user has exactly one organization (created at signup;
@@ -32,5 +33,6 @@ export async function getCurrentOrgForUser(userId: string): Promise<CurrentOrg |
     rawEventRetentionDays: membership.organization.rawEventRetentionDays,
     sessionRetentionDays: membership.organization.sessionRetentionDays,
     visitorRetentionDays: membership.organization.visitorRetentionDays,
+    autoOptimizeEnabled: membership.organization.autoOptimizeEnabled,
   };
 }

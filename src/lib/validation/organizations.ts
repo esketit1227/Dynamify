@@ -9,3 +9,8 @@ export const setRetentionWindowsSchema = z.object({
   visitorRetentionDays: z.number().int().min(1).max(730),
 });
 export type SetRetentionWindowsInput = z.infer<typeof setRetentionWindowsSchema>;
+
+export const setAutoOptimizeEnabledSchema = z.object({
+  enabled: z.boolean(),
+});
+export type SetAutoOptimizeEnabledInput = z.infer<typeof setAutoOptimizeEnabledSchema>;

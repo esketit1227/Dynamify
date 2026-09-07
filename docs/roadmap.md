@@ -1734,3 +1734,87 @@ the dev DB afterward.
 **Not done in this slice** (see `docs/launch-plan.md` §5C): the
 Auto-Optimize loop / real "enable personalization" automation — the step
 5 CTA is an honest link to existing manual flows, not new automation.
+
+### 2026-09-07 — Auto-Optimize loop, "Auto-draft" mode (docs/launch-plan.md §5C)
+
+The actual "automatically generate CRO optimization" feature — the thing
+the whole `docs/launch-plan.md` exercise was written in response to.
+Scoped to exactly what the plan itself recommended for launch: Auto-draft
+only, not Auto-promote (§7 decision 1) — nothing about how a rule reaches
+`APPROVED` changes. Confirmed before writing any code that the mechanism
+already existed almost entirely: `generateAllRecommendations` (segment
+detection) and `acceptRecommendation` (audience + AI draft, in one call)
+were already real, tested functions — this slice is the automatic
+*trigger* for calling them, plus the opt-in switch, not new generation
+logic.
+
+**Built:**
+- `Organization.autoOptimizeEnabled` (migration
+  `20260907084026_auto_optimize_enabled`), off by default. Org-wide, not
+  per-site — a deliberate, stated deviation from the plan's original
+  site-level framing, because recommendation detection already is
+  org-wide (`src/lib/recommendations/service.ts`'s own comment: "moved
+  out of the per-site Sites panel"). Forcing a site-level toggle onto an
+  org-level mechanism would have meant either faking site-scoping or
+  quietly changing what "site-level" means — flagged and resolved by
+  fitting the toggle to the real data model instead.
+- `runAutoOptimize` (`src/lib/autoOptimize/service.ts`) — for every
+  opted-in org: detect new segments, attempt to draft each one, stop
+  attempting more for that org the moment the shared 5/hour generation
+  rate limit is hit (one org's exhausted budget never touches another
+  org's run). A real, non-obvious behavior found while writing the first
+  version of this: `acceptRecommendation` marks a recommendation
+  `ACCEPTED` *before* it checks the rate limit (by original design —
+  generation is always best-effort, per its own pre-existing "accept
+  never fails because of it" test) — so the recommendation that actually
+  discovers the limit ends up `ACCEPTED`-with-no-draft, not left
+  `PENDING`; only the ones *after* it in the same batch stay untouched.
+  Got this wrong in the first draft (assumed the rate-limited one would
+  also stay `PENDING`), caught by a failing integration test, not by
+  inspection — fixed the comment and the test, not the behavior, since
+  the underlying accept-always-succeeds design is correct and predates
+  this slice.
+- `/api/cron/auto-optimize` — thin per CLAUDE.md's route-handlers-stay-
+  thin rule: authorizes (`CRON_SECRET` bearer match; unset means the
+  route always refuses, never falls open to running unauthenticated),
+  then calls `runAutoOptimize`. `vercel.json` schedules it once/day —
+  Vercel Hobby hard-caps cron at once/day (confirmed directly, not
+  assumed), stated plainly as a real constraint rather than silently
+  designed around: a paid plan buys more frequency later with zero code
+  change here, and daily is a normal real-world cadence for this kind of
+  analysis regardless.
+- `AutoOptimizeToggle` (Settings page) — same explicit-opt-in shape as
+  every other toggle in this app, copy states plainly that every draft
+  still needs manual review before anything goes live.
+
+**Verified live, not just unit-tested**: seeded 30 real `SiteEvent` rows
+(a genuine 40/60 mobile/desktop split) on a real previously-crawled site,
+enabled the toggle through the actual Settings page in a real browser
+(confirmed via network instrumentation: real `PATCH` request, real `200
+{"enabled":true}` response, checkbox state actually flips — a first
+attempt at this looked like it silently failed and turned out to be a
+flawed Playwright locator in the verification script, not a real bug;
+re-verified with a corrected script before trusting the result), then
+hit the real cron endpoint with the correct bearer token and confirmed:
+a real segment was detected, a real audience was created, and a real
+AI-generated 40-element experience was drafted — landing `PENDING`,
+confirmed directly in the database, never auto-approved. Auth confirmed
+separately: no header → 401, wrong secret → 401, correct secret → runs.
+All test data (events, the drafted experience, the audience, the
+session, the local-only `CRON_SECRET` test value) removed afterward.
+
+`pnpm typecheck && pnpm lint && pnpm test` clean (359 tests — 3 new
+integration tests in `tests/integration/autoOptimize.test.ts`, covering
+opt-in isolation, the rate-limit boundary behavior described above, and
+one org's failure never blocking another's run). `pnpm build` clean,
+confirmed both new routes (`/api/cron/auto-optimize`,
+`/api/organizations/[organizationId]/auto-optimize`) actually compiled
+in.
+
+**Not done, by design** (see `docs/launch-plan.md` §7 decision 1):
+Auto-promote — statistically-significant winners going live without a
+click. That's a genuinely different, harder question (what "unapproved"
+even means once a rule has already been approved once and is being
+re-evaluated against holdout data) than a UI toggle to add later, and
+launching Auto-draft first, with real customer trust, is what the plan
+itself recommended before touching it.

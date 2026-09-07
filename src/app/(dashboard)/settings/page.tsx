@@ -5,6 +5,7 @@ import { getCurrentOrgForUser } from "@/lib/organizations/current";
 import { listMembers } from "@/lib/organizations/members";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RetentionSettingsForm } from "@/components/settings/retention-settings-form";
+import { AutoOptimizeToggle } from "@/components/settings/auto-optimize-toggle";
 
 export default async function SettingsPage() {
   const user = await getSessionUser();
@@ -48,6 +49,10 @@ export default async function SettingsPage() {
         <p className="mt-4 text-xs text-muted">
           Inviting teammates isn&apos;t available yet.
         </p>
+      </div>
+
+      <div className="mb-8">
+        <AutoOptimizeToggle organizationId={organization.id} initialEnabled={organization.autoOptimizeEnabled} />
       </div>
 
       <div className="mb-8">

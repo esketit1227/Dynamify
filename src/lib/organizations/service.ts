@@ -24,3 +24,17 @@ export async function setRetentionWindows(
     visitorRetentionDays: updated.visitorRetentionDays,
   };
 }
+
+// docs/launch-plan.md §5C ("Auto-draft") — off by default, same explicit
+// opt-in shape as every other toggle in this app. Read by the daily cron
+// (src/app/api/cron/auto-optimize/route.ts) to decide which orgs to run
+// automatic recommendation-detection + draft-generation for. Turning this
+// on never bypasses approval — it only automates the "find an opportunity
+// and draft copy for it" steps that were previously manual clicks.
+export async function setAutoOptimizeEnabled(organizationId: string, enabled: boolean): Promise<boolean> {
+  const updated = await prisma.organization.update({
+    where: { id: organizationId },
+    data: { autoOptimizeEnabled: enabled },
+  });
+  return updated.autoOptimizeEnabled;
+}

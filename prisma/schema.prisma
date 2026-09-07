@@ -44,6 +44,19 @@ model Organization {
   sessionRetentionDays  Int @default(90)
   visitorRetentionDays  Int @default(730)
 
+  // docs/launch-plan.md §5C — "Auto-draft" only (the plan's own recommended
+  // scope for this slice): off by default, org-wide rather than per-site
+  // because generateAllRecommendations/acceptRecommendation already are
+  // (src/lib/recommendations/service.ts) — recommendations were never
+  // site-scoped to begin with. When on, a daily cron finds new segment
+  // opportunities and drafts AI experiences for them automatically. Every
+  // resulting rule still lands PENDING — this never bypasses "nothing goes
+  // live unapproved." "Auto-promote" (statistically-significant winners
+  // going live without a click) is deliberately not built here — it's a
+  // real fork on what "unapproved" even means once a rule has already been
+  // approved once and is being re-evaluated, not a UI toggle to add later.
+  autoOptimizeEnabled Boolean @default(false)
+
   memberships          Membership[]
   projects             Project[]
   pages                Page[]

@@ -36,6 +36,13 @@ const envSchema = z.object({
   // in this dev environment has a real credential to store yet — set
   // before connecting any real platform.
   PLATFORM_CREDENTIALS_ENCRYPTION_KEY: z.string().min(1).optional(),
+  // docs/launch-plan.md §5C — authenticates Vercel's own cron invocation of
+  // /api/cron/auto-optimize (Vercel sends `Authorization: Bearer
+  // ${CRON_SECRET}` automatically once this is set as a project env var).
+  // Optional in the schema only because not every deployment runs the cron
+  // at all — the route itself, not this schema, is what refuses every
+  // request outright when this is unset, never falling open.
+  CRON_SECRET: z.string().min(1).optional(),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
