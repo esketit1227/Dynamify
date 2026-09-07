@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/auth/errors";
-import { generateAudiences } from "@/lib/ai/generateAudiences";
+import { generateAudiences, buildBusinessDescriptionFromUnderstanding } from "@/lib/ai/generateAudiences";
 import type { Prisma, AiProposal } from "@/generated/prisma/client";
 import type { RuleOperator } from "@/generated/prisma/enums";
 
@@ -63,6 +63,48 @@ export async function createAudienceProposal(
     },
   });
   return toDTO(proposal);
+}
+
+// Same PENDING-proposal contract as createAudienceProposal above — the only
+// difference is where the business description comes from. Grounds the
+// proposal in what the crawl already learned (WebsiteUnderstanding) instead
+// of requiring a marketer to type one, so a freshly-connected site has real,
+// specific audience suggestions ready to review immediately — no traffic,
+// no manual input required. Still just a PENDING row; still requires a human
+// to approve before anything can match a real visitor.
+export async function createAudienceProposalFromSiteUnderstanding(
+  organizationId: string,
+  siteId: string,
+): Promise<ProposalDTO> {
+  const understanding = await prisma.websiteUnderstanding.findFirst({
+    where: { siteId, organizationId },
+    select: { companySummary: true, productSummary: true, targetCustomers: true, valueProps: true },
+  });
+  if (!understanding) throw new Error("No website understanding found for this site.");
+
+  const businessDescription = buildBusinessDescriptionFromUnderstanding(understanding);
+  const generated = await generateAudiences(businessDescription);
+
+  const proposal = await prisma.aiProposal.create({
+    data: {
+      organizationId,
+      kind: "AUDIENCE",
+      input: { source: "site-crawl", siteId } as Prisma.InputJsonValue,
+      proposedContent: generated as unknown as Prisma.InputJsonValue,
+    },
+  });
+  return toDTO(proposal);
+}
+
+// The single most recent unreviewed AUDIENCE proposal, if any — lets the
+// /audiences page show a server-triggered proposal (see above) immediately
+// on load, the same way it shows one from a manual "Generate with AI" click.
+export async function getPendingAudienceProposal(organizationId: string): Promise<ProposalDTO | null> {
+  const proposal = await prisma.aiProposal.findFirst({
+    where: { organizationId, kind: "AUDIENCE", status: "PENDING" },
+    orderBy: { createdAt: "desc" },
+  });
+  return proposal ? toDTO(proposal) : null;
 }
 
 async function getPendingProposal(organizationId: string, proposalId: string) {

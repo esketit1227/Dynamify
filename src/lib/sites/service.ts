@@ -8,6 +8,7 @@ import { classifyPageElements, buildHeuristicUnderstanding, deriveElementContent
 import { AiGenerationError, AiNotConfiguredError } from "@/lib/ai/errors";
 import { toSiteDTO, toSiteDetailDTO, type SiteDTO, type SiteDetailDTO } from "@/lib/sites/dto";
 import { seedDefaultAudiences } from "@/lib/audiences/service";
+import { createAudienceProposalFromSiteUnderstanding } from "@/lib/ai/proposals";
 import type { Prisma, ContentSection, ContentElementType, UnderstandingMethod } from "@/generated/prisma/client";
 
 export class SiteNotFoundError extends HttpError {
@@ -250,12 +251,17 @@ export async function runCrawlAndUnderstand(siteId: string): Promise<void> {
   const site = await prisma.site.findUnique({ where: { id: siteId } });
   if (!site) return;
 
+  // Read by the cold-start block below, after the try/catch — hoisted here
+  // since `method` is otherwise scoped inside the try block.
+  let understandingMethod: UnderstandingMethod | null = null;
+
   try {
     await prisma.site.update({ where: { id: siteId }, data: { status: "CRAWLING" } });
     const crawl = await crawlSite(site.url);
 
     await prisma.site.update({ where: { id: siteId }, data: { status: "UNDERSTANDING" } });
     const { method, pages, understanding } = await classify(crawl);
+    understandingMethod = method;
 
     // A retry (or any second run) on a site that already crawled
     // successfully once would otherwise hit CrawledPage's
@@ -364,5 +370,29 @@ export async function runCrawlAndUnderstand(siteId: string): Promise<void> {
   } catch {
     // Nothing to do — the org just starts with a blank Audiences page,
     // same as before this feature existed.
+  }
+
+  // Same cold-start posture as seedDefaultAudiences above: best-effort,
+  // never turns a successful connection into a failure. Only worth trying
+  // when real AI understanding actually ran — the heuristic fallback's
+  // targetCustomers is the literal "Needs AI — connect an
+  // ANTHROPIC_API_KEY..." placeholder (autoClassify.ts), which would just
+  // waste a call generating audiences from that string. Runs once per org
+  // (checked via existing AUDIENCE proposals, not `Audience` rows —
+  // seedDefaultAudiences already guarantees those are non-zero by the time
+  // this runs, which would make an `Audience`-count gate always skip) so a
+  // later site connected by the same org doesn't keep re-proposing.
+  if (understandingMethod === "AI") {
+    try {
+      const existingProposals = await prisma.aiProposal.count({
+        where: { organizationId: site.organizationId, kind: "AUDIENCE" },
+      });
+      if (existingProposals === 0) {
+        await createAudienceProposalFromSiteUnderstanding(site.organizationId, siteId);
+      }
+    } catch {
+      // Nothing to do — the org can still generate audiences manually from
+      // the /audiences page, same as before this feature existed.
+    }
   }
 }

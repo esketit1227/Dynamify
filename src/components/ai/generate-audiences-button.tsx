@@ -10,21 +10,40 @@ type ProposedAudience = {
   rules: Array<{ field: string; operator: string; value: unknown }>;
 };
 
+function toProposedAudiences(proposedContent: unknown): ProposedAudience[] {
+  if (
+    typeof proposedContent !== "object" ||
+    proposedContent === null ||
+    !("audiences" in proposedContent) ||
+    !Array.isArray((proposedContent as { audiences: unknown }).audiences)
+  ) {
+    return [];
+  }
+  return (proposedContent as { audiences: ProposedAudience[] }).audiences;
+}
+
 export function GenerateAudiencesButton({
   organizationId,
   onApproved,
+  initialProposal,
 }: {
   organizationId: string;
   onApproved: () => void;
+  initialProposal?: { id: string; proposedContent: unknown } | null;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(Boolean(initialProposal));
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fromSiteCrawl, setFromSiteCrawl] = useState(Boolean(initialProposal));
   const [proposal, setProposal] = useState<{
     id: string;
     audiences: ProposedAudience[];
-  } | null>(null);
+  } | null>(
+    initialProposal
+      ? { id: initialProposal.id, audiences: toProposedAudiences(initialProposal.proposedContent) }
+      : null,
+  );
 
   async function generate() {
     setError(null);
@@ -41,6 +60,7 @@ export function GenerateAudiencesButton({
         return;
       }
       setProposal({ id: data.proposal.id, audiences: data.proposal.proposedContent.audiences });
+      setFromSiteCrawl(false);
     } catch {
       setError("Something went wrong.");
     } finally {
@@ -59,6 +79,7 @@ export function GenerateAudiencesButton({
       setProposal(null);
       setOpen(false);
       setPrompt("");
+      setFromSiteCrawl(false);
       if (action === "approve") onApproved();
     } finally {
       setLoading(false);
@@ -101,7 +122,9 @@ export function GenerateAudiencesButton({
       ) : (
         <>
           <p className="text-xs font-medium text-muted">
-            Proposed audiences — nothing is saved until you approve
+            {fromSiteCrawl
+              ? "Suggested from your site's content — nothing is saved until you approve"
+              : "Proposed audiences — nothing is saved until you approve"}
           </p>
           <ul className="flex flex-col gap-2">
             {proposal.audiences.map((a, i) => (

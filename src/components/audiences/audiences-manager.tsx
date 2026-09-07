@@ -32,9 +32,11 @@ function emptyForm() {
 export function AudiencesManager({
   organizationId,
   initialAudiences,
+  initialProposal,
 }: {
   organizationId: string;
   initialAudiences: AudienceDTO[];
+  initialProposal?: { id: string; proposedContent: unknown } | null;
 }) {
   const [audiences, setAudiences] = useState<AudienceDTO[]>(initialAudiences);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -166,7 +168,11 @@ export function AudiencesManager({
       ) : (
         <div className="flex gap-2">
           <Button onClick={startCreate}>New audience</Button>
-          <GenerateAudiencesButton organizationId={organizationId} onApproved={load} />
+          <GenerateAudiencesButton
+            organizationId={organizationId}
+            onApproved={load}
+            initialProposal={initialProposal}
+          />
         </div>
       )}
 

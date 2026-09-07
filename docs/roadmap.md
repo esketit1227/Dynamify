@@ -2002,3 +2002,409 @@ after the change.
 **Not done**: the CRON_SECRET gap above needs the user to set it in
 Vercel — not something available to fix from here. D5 (legal review) and
 §5C's auto-promote mode remain open per their original decisions.
+
+**Correction, same day**: the max_tokens fix above was real and stayed,
+but it turned out not to be why production kept failing. Reconnecting
+novaprojectum.com through the actual deployed app *still* fell back to
+heuristic after the fix shipped — three separate attempts, well after
+the deploy had time to propagate. (The first two "AI-generated" reads
+that suggested otherwise were a false positive in my own test scripts:
+every site-detail page contains the literal substring "AI-generated
+images" in its unrelated AI-auto-approval toggle copy, so a naive
+`bodyText.includes("AI-generated")` check matches on every page
+regardless of actual understanding method — the same bug that produced
+an identical false "AI-generated" reading earlier in this session,
+never root-caused at the time. Fixed the check to read the actual
+status pill instead, which showed "Rule-based" on all five accumulated
+test rows.)
+
+With no persisted error detail to inspect (`Site.errorMessage` is
+cleared to `null` on the heuristic-fallback path, and only
+`console.error`, unreachable from here — no Vercel log access, no CLI
+auth, and direct production DB queries are blocked by this
+environment's own safety classifier) the actual reason was genuinely
+invisible. Added temporary instrumentation — `classify()` returns the
+caught error's `name`/`message`, `runCrawlAndUnderstand` writes it to
+`Site.errorMessage` even on the successful-heuristic path instead of
+clearing it — confirmed safe first (`site-detail.tsx` only ever renders
+`errorMessage` behind `status === "FAILED"`, so this is invisible to
+every user regardless of value). Shipped, retried an existing site
+through the real `/retry` endpoint, read the result back through the
+authenticated API (not page text): `errorMessage` was `"Error: 401
+{"type":"error","error":{"type":"authentication_error","message":"API
+key is invalid."}}"`.
+
+**The real root cause: the `ANTHROPIC_API_KEY` set in Vercel's
+Production environment is invalid.** Not a code bug at all. `getAnthropicClient`
+(`src/lib/ai/client.ts`) reads one global `env.ANTHROPIC_API_KEY` — there
+is no per-organization key anywhere in the schema — so this doesn't just
+break site understanding, it breaks every AI-backed feature in
+production: experience generation, audience suggestions, image
+generation, all of it, until the key is replaced. This needs the user to
+set a valid key in Vercel's dashboard (Production environment
+specifically — Preview/Development scoping wouldn't fix this); not
+something fixable from here.
+
+Reverted the temporary instrumentation immediately after reading the
+result, back to byte-identical behavior with before it was added
+(`errorMessage: null` on the heuristic path) — its only job was
+answering "why," and it did. `pnpm typecheck && pnpm test` (368, all
+passing) clean after the revert.
+
+### 2026-09-07 — Converting pages generated from crawl data alone, on /recommendations
+
+Requested directly: a way to generate a converting page using only the
+initial crawl, needing no other data, on the Recommendations page. The
+real gap this closes: every existing recommendation
+(`src/lib/recommendations/analyze.ts`) requires real traffic clearing
+`MIN_SAMPLE_SIZE`/a 20% share — a brand-new site shows "No recommendations
+yet" for as long as it takes to accumulate visits, with nothing actionable
+on day one even though the crawl (`WebsiteUnderstanding` + the
+`ContentElement` inventory) is already enough input for
+`generateExperience` to draft real copy.
+
+**The real constraint this ran into**: `GeneratedExperience` and
+`ElementPersonalizationRule` both require a real `audienceId`, and
+`matchAudience` (`packages/sdk/src/audience.ts`) is explicit and
+deliberate that "an audience with no rules never matches anyone." There is
+no "matches everyone" concept in the engine, and inventing one (a fake
+always-true rule, or a schema change to the pure resolver) would have
+silently resolved a real architectural question CLAUDE.md says to flag
+instead — not done here. Checked which of the existing
+`DEFAULT_AUDIENCES` presets (`src/lib/audiences/service.ts`, seeded free on
+a site's first crawl, per the 2026-08-28 Hardening entry) could actually
+stand in for "everyone" without that: `device` is computed unconditionally
+from the viewport by `dynamify-embed.js` on every real page load, no
+opt-in, no traffic history — genuinely matchable from visitor one. **Found
+along the way, not assumed**: `returning` (the field behind "New
+visitors"/"Returning visitors") is never actually populated by the real
+embed path at all — only the retired `src/lib/tracking/visitorContext.ts`
+module and the Live View simulator ever set it, confirmed by grep before
+relying on it — so those two starter audiences are currently unreachable
+by any real visitor. This makes "Mobile visitors" the only one of the
+three that's both zero-traffic-required and actually live-matchable today;
+picked deliberately, stated in the code (`convertingPages.ts`) and the UI
+copy rather than silently assumed.
+
+**Built**, entirely additive, zero changes to the personalization engine,
+`generateExperience`, or the schema:
+- `src/lib/recommendations/convertingPages.ts` — `listConvertingPageCandidates`
+  (every crawled page across the org's sites, each with its
+  `GeneratedExperience` for "Mobile visitors" if one exists yet) and
+  `generateConvertingPage` (find-or-create the "Mobile visitors" audience,
+  then call the existing `generateExperience` unchanged — same two-layer
+  brand-safety check, same PENDING-until-approved gate, same
+  `generate-experience:<org>` rate-limit budget as the traffic-triggered
+  path, shared rather than doubled). `findMatchingAudience`,
+  `findExperienceFor`, and `assertExperienceGenerationAllowed` were
+  exported from `src/lib/recommendations/service.ts` (previously private)
+  rather than re-implemented, and `DEFAULT_AUDIENCES` was exported from
+  `src/lib/audiences/service.ts` so the "Mobile visitors" preset has one
+  source of truth instead of a second hand-typed copy.
+- Two routes following the existing nesting convention: `GET
+  .../converting-pages`, `POST .../converting-pages/[crawledPageId]/generate`
+  — both `requireOrgAccess`-gated, `crawledPageId` always filtered by the
+  session's `organizationId` in the query, never trusted alone.
+- A new "Converting pages from your crawl" section on
+  `recommendations-page.tsx`, above the existing traffic-based
+  Recommendations list — one row per crawled page, a "Generate a
+  converting page" button when nothing exists yet, the same
+  `ExperienceReview` (before/after preview, per-piece method/status,
+  Approve all/Reject all) once something does. Copy states plainly that
+  this targets mobile visitors specifically, not "everyone" — no
+  overclaiming what a single-audience mechanism can't do.
+
+**Verified live against the real running dev server**, not just
+integration-tested: seeded a real org/site/crawled page/two `HEADLINE`
+elements/`WebsiteUnderstanding` directly (no crawl re-run needed — this
+feature only ever reads what a crawl already produced), confirmed zero
+`SiteEvent` rows existed before or after, minted a real session and hit
+the actual HTTP routes end to end. `GET .../converting-pages` correctly
+listed the page with `experience: null`; `POST .../generate` created a
+real "Mobile visitors" `Audience` (device equals mobile) and a real
+`PENDING` `GeneratedExperience` — with `ANTHROPIC_API_KEY` configured in
+this environment, one piece actually came back `AI`-generated
+("Keep your team shipping fast, from any screen," genuinely mobile-framed
+copy) and the other `HEURISTIC` (site-wide reselection, per the existing
+fallback), matching `generateExperience`'s documented per-element
+behavior exactly; a second organization's session got an empty candidate
+list and a real 404 attempting to generate against the first org's
+crawled page (cross-tenant isolation, confirmed by database state after,
+not just the HTTP status). All seeded orgs/users/data removed afterward,
+confirmed by a direct count query.
+
+`pnpm typecheck && pnpm lint && pnpm test (368, 6 new in
+tests/integration/convertingPages.test.ts: zero-traffic listing, org
+isolation on both list and generate, audience find-or-create/no
+duplicates, 404 on another org's page) && pnpm build` all clean.
+
+**Not done, stated plainly**: a true "converting page for every visitor,"
+not just mobile ones — that needs a real product/architecture decision
+(a first-class "matches everyone" audience concept, or serving improved
+default content outside the audience-match pipeline entirely), flagged
+here rather than resolved silently; fixing "New visitors"/"Returning
+visitors" so they actually match real traffic (the dead `returning`
+attribute found above) — a real, separate, scoped gap, not this task's
+job.
+
+### 2026-09-07 — "Design a new page": AI-generated layouts, design-only (D8/D9)
+
+Requested directly, as an extension of the converting-pages feature above:
+the generator should research the market/competitors, not just the crawl,
+and should be able to produce "totally new pages with self-designed
+layouts," not just rewrite existing content. Both went well beyond the
+converting-pages slice's scope and directly touched two things this
+codebase treats as load-bearing: `docs/product-spec.md`'s "never changes
+your layout" definition (repeated twelve times, including the doc's own
+one-line elevator pitch) and D4's brand-safety model (built assuming
+exactly one trusted content source). Two Explore passes over the real code
+confirmed why "new layout" specifically has no small version: the crawler
+discards raw HTML immediately after extraction, `ContentElement` only
+ever stores flat `(section, type, text, selector, order)` tuples, and both
+the embed script and Live View's preview only ever do exact-match
+`textContent`/attribute swaps on a single verified node — never
+`innerHTML`, never structural insertion. There is no existing mechanism to
+extend; a new-layout feature has to be a green-field delivery decision.
+
+Rather than build any of that opportunistically, both forks were put to
+the user directly with their real tradeoffs before writing code — D8
+(layout) as four concrete delivery-mechanism options (design-only preview;
+Dynamify-hosted alternate page + redirect; full client-side DOM
+replacement; server-side edge rendering, the option D1 already rejected
+once), D9 (research) as three sourcing options (customer-provided
+competitor URLs through the existing crawler; a new live search-API
+integration; AI-knowledge-only). The user chose the smallest, safest
+branch of each: **design-only** and **AI-knowledge-only**. See
+`docs/decisions.md` D8/D9 (now decided) and the new **D10** (whether an
+endorsed design should ever reach a visitor — explicitly still open, not
+resolved by this slice).
+
+**Built**, entirely additive, zero changes to the personalization engine,
+`generateExperience`, or D2/D3's verification model:
+- `PageDesign` (new model, `prisma/schema.prisma`) — `sections` is a
+  zod-validated `Json` column, not a child table (always read/written as
+  one unit, and the layout-variant vocabulary was expected to churn early
+  — true in practice, see below). `PageDesignStatus` is `PENDING`/
+  `ENDORSED`, deliberately not reusing "APPROVED," which means "live"
+  everywhere else in this schema.
+- `src/lib/sites/designPage.ts` — `researchMarketContext` (D9, one
+  Anthropic call, no live fetching); `generateNewPageDesign` (D8): loads
+  the crawl + `WebsiteUnderstanding`, tries AI, falls back to a pure
+  `composeHeuristicDesign` that copies only real crawled/understanding
+  strings verbatim (unit-tested as an invariant — every emitted string
+  must appear in the input). Brand safety is D4's two-layer check
+  *adapted*, not reused as-is: `buildContentCorpus`/
+  `checkClaimsAgainstCorpus` are reused unchanged, but a new
+  `checkDesignWithModel` replaces `suggestVariant.ts`'s `checkWithModel`
+  for this one caller (that function's 1:1 "original vs. rewrite"
+  contract has live callers and has no way to express "an entirely new
+  page, checked against a whole profile instead of one element" — a
+  real, deliberate fork, not a modification of shared code with live
+  dependents). A new, non-negotiable rule D4 never needed before:
+  `enforceTestimonialAuthenticity` (sanitizer) plus
+  `assertNoFabricatedTestimonials` (a non-bypassable assertion at the
+  single `prisma.pageDesign.create` call site, regardless of which path
+  produced the sections) — a TESTIMONIALS section may only ever contain
+  quotes that literally match real crawled content; product-spec §13's
+  "never fabricate customers" ban, enforced structurally, not just
+  prompted. Real quotes are sourced with a filter, not wholesale — reading
+  `autoClassify.ts` directly first showed it also classifies logo images
+  and section headings as `section: TESTIMONIALS`, which are not quotes.
+- Four routes under `.../page-designs/...` (list, generate, get,
+  endorse, reject) and a third "Design a new page" section on
+  `/recommendations`, below the two traffic/crawl sections since it's the
+  most speculative of the three. `page-design-preview.tsx` deliberately
+  does *not* reuse `RenderedPreview`/`ResolvedPage` (that type carries
+  real `ContentElement` ids and SDK personalization provenance a design
+  has none of) — it echoes `RenderedPreview`'s browser-chrome frame
+  styling so the two read as one family without coupling a churning new
+  layout library to a live, high-traffic surface. The review UI states
+  the D8/D9 boundaries in the customer's own words, not just in code
+  comments: a market-context callout labeled "AI general knowledge — not
+  live research," and "Endorsing records that you like this direction. It
+  does not change your website — Dynamify never publishes layouts." The
+  word "Live" never appears in this component.
+
+**Two real bugs found via live verification, neither by inspection —
+exactly the pattern this session's earlier `understandSite` fix followed:**
+own tests all passed first, against the heuristic-only path (no
+`ANTHROPIC_API_KEY` in the test environment) — but this repo has a real
+key configured, so the AI path was exercised live before calling this
+done, and it failed **100% of the first several attempts**, both with the
+identical error message ("AI returned an unexpected shape"), which turned
+out to be two unrelated causes:
+1. `generateDesignWithAi`'s tool call: the model consistently returned
+   `sections` as a **JSON string containing a second, self-referential
+   `{ sections: [...] }` wrapper** — not the literal array the tool schema
+   asked for. Confirmed 100% reproducible across repeated real calls with
+   this exact schema/model, not an occasional fluke. Fixed with
+   `coerceToolSections`, a defensive unwrap tried before validation (a
+   well-formed literal array still passes through unchanged).
+2. `researchMarketContext`'s `positioningAngles`: capped at `.max(5)`
+   items of `.max(200)` characters each; the model reasonably produced up
+   to 8 substantive angles, and individual angles sometimes ran past 200
+   characters. A hard cap threw the whole response away over a cosmetic
+   overage. Fixed by truncating (array to 5, each string to 200 with an
+   ellipsis) via a zod `.transform`, not rejecting — "don't discard a good
+   result over a minor mismatch," the same principle as fix 1.
+
+**Not fixed, and deliberately not chased further**: a third, rarer failure
+mode surfaced in the same live testing (roughly 1 in 20 attempts) — under
+a long generation, the model occasionally lets what looks like an internal
+tool-call formatting artifact leak into the `summary` string itself and
+omits `positioningAngles` entirely. This reads as a genuine model-quality
+limit under long output, not a fixable shape bug, and the existing
+`AiGenerationError` → heuristic-composer fallback already handles it
+correctly and honestly (a real, fully legitimate, real-content-only
+design, just not an AI one for that attempt) — regex-parsing a malformed
+artifact out of a string field for an already-safely-degrading edge case
+would be exactly the kind of fragile, low-value complexity CLAUDE.md's
+minimalism principle argues against. Stated here as real, observed
+information about the feature's reliability, not smoothed over: across
+live testing this session, the AI path succeeded roughly 90% of the time
+after both real fixes above, heuristic the rest — every single attempt,
+either way, produced a real, safe, reviewable design.
+
+**Verified live end to end**, API-level and in a real browser, not just
+integration-tested: seeded a real org/site/crawled page/elements
+(including one real testimonial quote and one testimonial-*shaped* decoy —
+a logo image and a section heading — to prove the authenticity filter
+tells them apart) directly, hit all four routes with a minted session, and
+confirmed by direct database query that generating *and* endorsing a
+design leaves `Audience`/`ElementPersonalizationRule`/`ElementVariant`/
+`GeneratedExperience` all at zero — the D8 boundary as a fact, not an
+assumption. Cross-org isolation confirmed on every route (404s, not
+leaked-empty-vs-real distinctions). Then drove the actual `/recommendations`
+page with Playwright: generated a design, confirmed the real crawled
+headline/value-props/testimonial render correctly in the preview (reading
+the DOM's real text content, not just a screenshot — the CTA banner's
+button text turned out to be genuinely present but below the preview's
+own `max-h-[560px]` scroll fold in a full-page screenshot, caught and
+correctly identified as a test-methodology artifact rather than miscalled
+as a bug), confirmed the honesty labeling renders, clicked "Endorse this
+direction," and confirmed the endorsed state and its "nothing has been
+published" copy. Zero console/page errors throughout. All seeded
+organizations/users/data removed afterward, confirmed by count.
+
+`pnpm typecheck && pnpm lint && pnpm test (414, 46 new: 31 unit in
+tests/unit/sites/designPage.test.ts covering schema validation, the
+testimonial-authenticity sanitizer and its non-bypassable assertion
+counterpart, the heuristic composer's never-invents invariant, and prompt
+builders; 15 integration in tests/integration/pageDesigns.test.ts covering
+the D8 zero-artifact boundary, testimonial sourcing against real
+`autoClassify.ts` noise, cross-org isolation, 404s, and the page-design
+budget's independence from generate-experience's) && pnpm build` all
+clean.
+
+**Not done, stated plainly** (see `docs/decisions.md` D8/D9/D10): no
+live-delivery mechanism of any kind — D10 is the open successor question,
+not resolved here; no real image generation for `imageDescription` fields
+(placeholders only, captioned "Image concept — not generated"); no
+export/handoff out of the app; no `PRICING`/`FAQ` sections (pricing means
+writing a price, which product-spec §13 already bans as fabrication; FAQ
+needs a shape this schema doesn't carry); no layout-library expansion,
+per-section regeneration, or design history beyond one-most-recent; one
+design per page, not per audience, since there's no delivery mechanism to
+differentiate for; no live or verified market research — the "provable
+sources" part of the original request is explicitly not satisfied by
+AI-knowledge-only, stated rather than glossed over; no new env vars or
+provider — both new AI calls reuse the existing `getAnthropicClient()`.
+
+### 2026-09-07 — Audience proposals auto-generated from the crawl, not just typed by hand
+
+Requested directly: audiences should be able to start working from the AI's
+own research after crawling a site, not only from a marketer typing a
+business description or from accumulated visitor traffic. Matches
+product-spec.md §25/26's stated differentiator directly — "AI understands
+website → AI understands visitor → AI adapts content," automatic rather
+than manual — and closes a real gap in the existing manual "Generate with
+AI" flow (`src/lib/ai/generateAudiences.ts`): it already existed, but only
+ever read a business description a human typed by hand, never the
+`WebsiteUnderstanding` the crawl already produced.
+
+**What it does**: right after a site's first crawl succeeds with real AI
+understanding (not the heuristic fallback), `runCrawlAndUnderstand`
+(`src/lib/sites/service.ts`) now also calls the new
+`createAudienceProposalFromSiteUnderstanding` (`src/lib/ai/proposals.ts`),
+which builds a business description straight from
+`companySummary`/`productSummary`/`targetCustomers`/`valueProps`
+(`buildBusinessDescriptionFromUnderstanding`, capped at the same 1000 chars
+as the manual flow's own input schema) and calls the *existing*
+`generateAudiences()` — same AI call, same PENDING-`AiProposal` contract,
+same human-approval gate as the manual button. Nothing new is auto-created;
+only a proposal is auto-*drafted*. Gated on `method === "AI"` (the
+heuristic fallback's `targetCustomers` is the literal "Needs AI — connect
+an ANTHROPIC_API_KEY..." placeholder — grounding a proposal in that string
+would just waste a call) and on the org having zero existing AUDIENCE
+proposals yet (checked via `AiProposal` count, not `Audience` count —
+`seedDefaultAudiences` already guarantees the latter is non-zero by the
+time this runs, which would make an `Audience`-count gate never fire).
+Wrapped in the same non-blocking try/catch as `seedDefaultAudiences`
+alongside it — a failure here can never turn a successful site connection
+into a failed one.
+
+**Also fixed while touching this file**: the manual flow's own prompt still
+told the model `returning`/`sessionCount` were usable targeting fields —
+both are dead in the real embed path (2026-09-07 audience-proposal
+investigation, same day, see below) and could never actually match a
+visitor. Removed from the prompt for both the manual and the new
+crawl-grounded path, since both share the same underlying call.
+
+**UI**: a server-triggered proposal needed real plumbing to even be
+visible — before this, `/audiences` only ever showed a proposal as
+transient client state from the direct response of clicking "Generate with
+AI," with no fetch of existing `PENDING` proposals on load at all (a
+pre-existing one would have sat in the DB, permanently invisible). Added
+`getPendingAudienceProposal` and wired it into the page's server component
+alongside `listAudiences`, passed down as `initialProposal` through
+`AudiencesManager` to `GenerateAudiencesButton`, which now seeds its state
+from it and opens automatically — labeled "Suggested from your site's
+content" to distinguish it from a proposal the marketer asked for by hand.
+
+**A second real bug found via live verification, not by inspection** (same
+posture as every other AI-path fix this session): the new code path threw
+"AI returned an unexpected shape" non-deterministically — roughly one
+attempt in three in an 8-call live stress test against the real API,
+confirmed via temporary diagnostic logging (`response.stop_reason` was
+`"tool_use"`, not `"max_tokens"` — ruling out a truncation bug before
+assuming one). The actual cause: the model sometimes wraps `audiences` as a
+JSON **string** containing a second, self-referential `{ audiences: [...]
+}` object, not the literal array the tool schema asks for — the exact same
+quirk already found and fixed in this session's page-design work
+(`coerceToolSections`, same day), just independently rediscovered here in
+a different tool call. Fixed with a self-contained `coerceToolAudiences`
+(kept local to this file rather than extracted into a shared helper, since
+the page-design work that has the sibling implementation is separate,
+concurrent, uncommitted work) — unwraps the observed shape before
+validating; a well-formed literal array still passes through unchanged.
+Re-verified with the same 8-call live stress test after the fix: 8/8
+succeeded. Worth remembering as a pattern for any future structured-array
+tool call against this model, not just these two call sites.
+
+**Verified live end to end**, not just typechecked: started the real dev
+server with the real local `ANTHROPIC_API_KEY`, signed up a fresh account,
+connected `https://example.com` through the actual UI, confirmed
+`AI-generated` on the real status pill (not a substring match on page
+text — this session already has one prior false-positive from exactly that
+mistake), and confirmed `/audiences` showed four real, specific,
+immediately-matchable audiences (paid search via `utm.medium`, organic/
+direct via `referrer`, mobile via `device`, non-US via `geo.country` —
+none used a dead field) labeled "Suggested from your site's content,"
+with the "Approve — create these audiences" / "Discard" gate intact and
+the pre-existing default audiences still listed underneath, unaffected.
+All test accounts, organizations, and their cascaded data removed from the
+local dev database afterward — the one permanent `preview@dynamify.local`
+account (see memory) left untouched.
+
+`pnpm typecheck && pnpm lint && pnpm test (433 — 19 new: 13 unit in
+tests/unit/ai/generateAudiences.test.ts covering
+buildBusinessDescriptionFromUnderstanding and coerceToolAudiences, 6
+integration in tests/integration/audienceProposalsFromCrawl.test.ts
+covering the WebsiteUnderstanding lookup, org-scoping, and the "no partial
+proposal on AI failure" invariant) && pnpm build` all clean.
+
+**Not done**: no way to dismiss a server-triggered proposal without either
+approving or discarding it — same limitation the manual flow already had,
+not a regression; per-site audiences (the underlying `Audience` model is
+still org-scoped, not site-scoped, an existing constraint this feature
+didn't change or attempt to).

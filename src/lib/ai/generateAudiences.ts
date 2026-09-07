@@ -28,6 +28,30 @@ export const generateAudiencesOutputSchema = z.object({
 });
 export type GeneratedAudiences = z.infer<typeof generateAudiencesOutputSchema>;
 
+// Defensive, not theoretical: verified live against the real Anthropic API
+// (this exact tool schema, this model) that `audiences` sometimes comes back
+// as a JSON string containing a *second*, self-referential
+// `{ audiences: [...] }` wrapper — not the literal array the schema asks
+// for — non-deterministically, roughly one attempt in three during live
+// testing. Same shape of quirk as this codebase's other structured-array
+// tool calls; unwrap the observed shape before validating rather than let a
+// perfectly good result fail zod over pure JSON-vs-string packaging. A
+// well-formed literal array still passes straight through unchanged.
+export function coerceToolAudiences(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object" && Array.isArray((parsed as { audiences?: unknown }).audiences)) {
+      return (parsed as { audiences: unknown[] }).audiences;
+    }
+  } catch {
+    // Not valid JSON either — fall through and let the zod array check
+    // produce the same "unexpected shape" rejection as before.
+  }
+  return raw;
+}
+
 const TOOL_NAME = "propose_audiences";
 
 // The user's free-form description is untrusted input, never an instruction
@@ -47,7 +71,9 @@ export async function generateAudiences(businessDescription: string): Promise<Ge
       "business description the user provides. Each audience needs a name, a short " +
       "description, and 1-3 targeting rules using only the visitor attributes: " +
       "geo.country, geo.region, device, referrer, utm.source, utm.medium, utm.campaign, " +
-      "returning, sessionCount, or attributes.<custom>.",
+      "or attributes.<custom>. Do not use \"returning\" or \"sessionCount\" — this " +
+      "deployment never populates them, so a rule built on either can never match a " +
+      "real visitor.",
     messages: [
       {
         role: "user",
@@ -109,10 +135,40 @@ export async function generateAudiences(businessDescription: string): Promise<Ge
     throw new AiGenerationError();
   }
 
-  const parsed = generateAudiencesOutputSchema.safeParse(toolUse.input);
+  const input = toolUse.input as { audiences?: unknown };
+  const parsed = generateAudiencesOutputSchema.safeParse({
+    ...input,
+    audiences: coerceToolAudiences(input?.audiences),
+  });
   if (!parsed.success) {
     throw new AiGenerationError("AI returned an unexpected shape.");
   }
 
   return parsed.data;
+}
+
+// Reuses the same generateAudiences() call the manual "Generate with AI"
+// flow uses — this just sources the business description from what the
+// crawl already learned (WebsiteUnderstanding) instead of requiring a
+// marketer to type one, so audience proposals exist immediately after
+// connecting a site, before any real visitor traffic. Same 1000-char cap
+// as generateAudienceProposalSchema (src/lib/validation/ai.ts).
+export function buildBusinessDescriptionFromUnderstanding(understanding: {
+  companySummary: string;
+  productSummary: string;
+  targetCustomers: string;
+  valueProps: unknown;
+}): string {
+  const valueProps = Array.isArray(understanding.valueProps)
+    ? understanding.valueProps.filter((v): v is string => typeof v === "string")
+    : [];
+
+  const parts = [
+    understanding.companySummary && `Company: ${understanding.companySummary}`,
+    understanding.productSummary && `Product: ${understanding.productSummary}`,
+    understanding.targetCustomers && `Target customers: ${understanding.targetCustomers}`,
+    valueProps.length > 0 && `Value propositions: ${valueProps.join("; ")}`,
+  ].filter(Boolean);
+
+  return parts.join(" ").slice(0, 1000);
 }
