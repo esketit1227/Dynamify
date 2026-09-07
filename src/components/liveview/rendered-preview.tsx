@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type KeyboardEvent } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { ResolvedPage } from "@dynamify/personalization-sdk";
 
@@ -85,10 +85,23 @@ export function RenderedPreview({
   resolved,
   pageUrl,
   label,
+  onElementClick,
+  selectedComponentId,
 }: {
   resolved: ResolvedPage;
   pageUrl: string;
   label?: string;
+  // docs/launch-plan.md §5D — the in-context reviewer: when provided, every
+  // rendered element becomes clickable (not just the ones already
+  // personalized — reviewing "nothing's set for this yet" is exactly when
+  // you'd want to add a first rule), reporting back the real ContentElement
+  // id (component.id === el.id, see mapToDefinition.ts) so the caller can
+  // open that element's actual review widget. Omitted entirely (the
+  // default-visitor reference panel, which is never what you'd click into)
+  // means elements render as plain, non-interactive content, unchanged
+  // from before this existed.
+  onElementClick?: (componentId: string) => void;
+  selectedComponentId?: string | null;
 }) {
   const reduceMotion = Boolean(useReducedMotion());
 
@@ -152,10 +165,32 @@ export function RenderedPreview({
               </p>
             ) : null;
 
+            const clickable = Boolean(onElementClick);
+            const selected = selectedComponentId === component.id;
+            const wrapperClassName = clickable
+              ? `-mx-2 cursor-pointer rounded-lg px-2 py-1 ring-1 ring-transparent transition-colors hover:bg-background hover:ring-foreground/25 ${
+                  selected ? "bg-background ring-2 ring-foreground" : ""
+                }`
+              : "";
+            const wrapperProps = clickable
+              ? {
+                  role: "button" as const,
+                  tabIndex: 0,
+                  "aria-pressed": selected,
+                  onClick: () => onElementClick?.(component.id),
+                  onKeyDown: (e: KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onElementClick?.(component.id);
+                    }
+                  },
+                }
+              : {};
+
             if (component.type === "IMAGE" || component.type === "LOGO") {
               if (!looksLikeUrl(text)) return null;
               return (
-                <div key={component.id}>
+                <div key={component.id} className={wrapperClassName} {...wrapperProps}>
                   {sectionLabel}
                   {/* Arbitrary customer-supplied URL, not a known remote-domain
                       allowlist next/image needs — same posture as
@@ -168,7 +203,7 @@ export function RenderedPreview({
 
             if (component.type === "CTA_LABEL") {
               return (
-                <div key={component.id}>
+                <div key={component.id} className={wrapperClassName} {...wrapperProps}>
                   {sectionLabel}
                   <span className="inline-flex w-fit rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background">
                     <AnimatedText
@@ -193,7 +228,7 @@ export function RenderedPreview({
                   : "text-sm leading-relaxed text-foreground";
 
             return (
-              <div key={component.id}>
+              <div key={component.id} className={wrapperClassName} {...wrapperProps}>
                 {sectionLabel}
                 <AnimatedText
                   value={text}

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireOrgAccess } from "@/lib/auth/requireOrgAccess";
-import { getLiveViewDefinition } from "@/lib/liveview/service";
+import { getLiveViewDefinition, getLiveViewPageElements } from "@/lib/liveview/service";
 import { toErrorResponse } from "@/lib/api/respond";
 
 export async function GET(
@@ -10,8 +10,11 @@ export async function GET(
   try {
     const { organizationId, pageId } = await params;
     const { organization } = await requireOrgAccess(organizationId);
-    const definition = await getLiveViewDefinition(organization.id, pageId);
-    return NextResponse.json({ definition });
+    const [definition, { elements, audiences }] = await Promise.all([
+      getLiveViewDefinition(organization.id, pageId),
+      getLiveViewPageElements(organization.id, pageId),
+    ]);
+    return NextResponse.json({ definition, elements, audiences });
   } catch (error) {
     return toErrorResponse(error);
   }

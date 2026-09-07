@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session";
 import { getCurrentOrgForUser } from "@/lib/organizations/current";
-import { listLiveViewPages, getLiveViewDefinition } from "@/lib/liveview/service";
+import { listLiveViewPages, getLiveViewDefinition, getLiveViewPageElements } from "@/lib/liveview/service";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { LiveView } from "@/components/liveview/live-view";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -13,13 +13,18 @@ export default async function LiveViewPage() {
   if (!organization) redirect("/login");
 
   const pages = await listLiveViewPages(organization.id);
-  const initialDefinition = pages[0] ? await getLiveViewDefinition(organization.id, pages[0].id) : null;
+  const [initialDefinition, initialElements] = pages[0]
+    ? await Promise.all([
+        getLiveViewDefinition(organization.id, pages[0].id),
+        getLiveViewPageElements(organization.id, pages[0].id),
+      ])
+    : [null, null];
 
   return (
     <>
       <PageHeader
         title="Live View"
-        description="Simulate a visitor — device, location, traffic source — and see exactly what they'd get."
+        description="Simulate a visitor, then click anything personalized on the page to review or change it."
       />
       {pages.length === 0 ? (
         <EmptyState
@@ -27,7 +32,13 @@ export default async function LiveViewPage() {
           description="Connect a site and let it finish reading before simulating visitors here."
         />
       ) : (
-        <LiveView organizationId={organization.id} pages={pages} initialDefinition={initialDefinition} />
+        <LiveView
+          organizationId={organization.id}
+          pages={pages}
+          initialDefinition={initialDefinition}
+          initialElements={initialElements?.elements ?? []}
+          initialAudiences={initialElements?.audiences ?? []}
+        />
       )}
     </>
   );

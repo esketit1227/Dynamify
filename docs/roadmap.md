@@ -1818,3 +1818,72 @@ even means once a rule has already been approved once and is being
 re-evaluated against holdout data) than a UI toggle to add later, and
 launching Auto-draft first, with real customer trust, is what the plan
 itself recommended before touching it.
+
+### 2026-09-07 — Live View becomes the in-context reviewer (docs/launch-plan.md §5D)
+
+"Click any personalized element directly on the page, see its variants
+per audience right there" — the plan's answer to the WYSIWYG gap.
+Deliberately additive, not a rewrite: `ElementPersonalize`
+(`src/components/sites/element-personalize.tsx`) already did approve/
+pause/delete/add-a-rule correctly and in plain language — this slice
+gives it a place to open next to what you actually clicked, instead of
+requiring a trip to the Sites page's flat, scroll-through-everything
+list to find the right element by matching its text.
+
+**Built:**
+- `getLiveViewPageElements` (`src/lib/liveview/service.ts`) — the *full*
+  per-element picture (every rule status, the boundary), deliberately
+  separate from `getLiveViewDefinition`, which only ever sees `APPROVED`
+  rules on purpose (resolve() must never see a pending draft — that
+  invariant predates this slice and stays exactly as strict).
+- Every element in `RenderedPreview` is now genuinely clickable (not just
+  the personalized ones — reviewing "nothing's set for this yet" is
+  exactly when you'd want to add a first rule), reporting the real
+  `ContentElement.id` back to the caller — confirmed `component.id ===
+  el.id` directly in `mapToDefinition.ts` before relying on it, not
+  assumed.
+- `ReviewPanel` (in `live-view.tsx`) — a slide-over that renders
+  `ElementPersonalize` for whatever's selected, wired to close on Escape,
+  backdrop click, or the X. `onChanged` re-fetches this page's full data
+  and re-resolves against the *current* persona, so approving or pausing
+  a rule updates the preview immediately without losing the simulated
+  visitor you were looking at.
+- "Why this changed" entries are now clickable too (opens the same
+  panel), covering the case where the real-site iframe preview
+  (`WebsitePreview`) is showing instead of the synthesized one — that
+  iframe itself stays non-interactive (deliberately out of scope; same-
+  origin `srcDoc` access would make it *technically* feasible, but the
+  synthesized preview plus this list already covers every element
+  without that added complexity).
+- Fixed the same raw-enum leak found and fixed elsewhere this session
+  (`docs/roadmap.md`'s 2026-09-04 entry) in two more spots this slice
+  touched directly: `component.type` in "Why this changed", and a
+  same-page-scoped `library` builder for the `IMAGE`/`LOGO`/`CTA_HREF`
+  picker (previously would've silently passed `[]`, breaking that picker
+  for exactly the element types that need it — caught before shipping,
+  not after).
+
+**Verified live in a real browser**, not just typechecked: clicked
+"Review or change this" on a real personalized element, confirmed the
+panel opens with correctly humanized labels (checked via raw
+`textContent`, not just visually — CSS `uppercase` on single-word types
+like "Headline" looks identical to the raw enum at a glance, so the
+multi-word cases like `CTA_LABEL` → "Button text" are what actually
+prove the fix, not the ones that happen to look the same either way),
+expanded the rule list, and exercised the actual Pause/Turn-back-on
+round trip. **Found a real bug in my own verification, not the product**:
+an ambiguous Playwright locator (`"Turn back on"` matched two rules once
+both were paused) flipped the *wrong* rule, silently re-creating the
+exact manual-vs-heuristic collision fixed earlier this session (2026-09-04
+entry) on the same element. Caught by checking the database directly
+after the interaction instead of trusting the UI text alone, restored to
+the correct state (manual rule `APPROVED`, heuristic `DISABLED`)
+immediately. Worth recording plainly: the product behavior was correct
+throughout — state changes really did persist and the preview really did
+refresh live — the bug was entirely in how the test clicked, and it's
+exactly why this session checks the database after every live UI test
+rather than trusting rendered text alone.
+
+`pnpm typecheck && pnpm lint && pnpm test && pnpm build` all clean (359
+tests — no new ones this slice; the UI reuses `ElementPersonalize`'s
+already-tested actions rather than adding new business logic).
