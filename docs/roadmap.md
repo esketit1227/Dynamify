@@ -1942,3 +1942,63 @@ framing) — needs a real `audienceId` (or matched-rule) column on
 `heldOut` already are. A real, scoped follow-up, not a rewrite — noted
 here so it doesn't quietly become "already done" because the language
 now sounds like it.
+
+### 2026-09-07 — Final end-to-end confirmation: `understandSite` truncation bug found and fixed
+
+User asked for one last full confirmation pass against the real
+production deployment before treating any of §5 as done. Two findings.
+
+**CRON_SECRET is not set in production.** Confirmed by curling
+`/api/cron/auto-optimize` directly (503 with no auth header, 503 with a
+garbage bearer token — the route never even reaches the "wrong secret"
+branch, meaning the check that gates it is failing closed on a missing
+env var). The §5C daily Auto-Optimize cron (`vercel.json`) cannot run
+until this is added in Vercel's environment settings. Not something I
+can set myself; flagging for the user to add.
+
+**`understandSite` (`src/lib/sites/understand.ts`) silently fell back to
+heuristic on real sites.** Reconnected novaprojectum.com through the
+actual production UI as a real logged-in user (minted a session for the
+real account directly in the production DB, drove the real `/sites` flow
+with Playwright) — it connected, but landed on `HEURISTIC`, not
+AI-generated, twice, 8 minutes apart. Ruled out an exhausted/rate-limited
+API key first (a bare `messages.create` succeeded immediately). Then
+reproduced the exact failure locally: crawled novaprojectum.com for real
+(13 pages, 541 elements) and called `understandSite` directly — same
+`AiGenerationError: "AI returned an unexpected shape."`
+
+Root cause: the same bug class as the `generateExperience.ts` fix earlier
+this phase, in a function that fix didn't touch. `understand.ts` caps
+its prompt at `MAX_ELEMENTS_FOR_PROMPT = 150`, but was calling the model
+with `max_tokens: 4096` — nowhere near enough to classify up to 150
+elements (each its own `{elementId, section, elementType}` object, and a
+full cuid element id alone runs ~10-15 tokens) plus produce the
+company/product/brand/value-prop text in the same response. The model's
+JSON got cut off mid-object at `stop_reason: "max_tokens"`; zod's
+`safeParse` correctly rejected the truncated shape, and the resulting
+error message ("AI returned an unexpected shape") carries no diagnostic
+detail, which is why this looked identical to an AI shape-drift bug
+rather than an output-budget one. It wasn't deterministic — sites with
+shorter classified-element ids or less verbose brand copy stayed under
+4096 and quietly worked, which is why elevenlabs.io, ahrefs.com, and
+stripe.com had all succeeded earlier in this same session and masked the
+bug for a full-content site like this one.
+
+Fixed by raising `max_tokens` to `16000` — the same value proven safe for
+`generateExperience.ts`'s own version of this bug, and comfortably above
+the ~6-7k tokens this call actually needs. Tried `24000` first as a wider
+margin; the Anthropic SDK itself rejected that as a non-streaming call
+("Streaming is required for operations that may take longer than 10
+minutes"), so `16000` is also the right choice for staying a synchronous,
+non-streaming call rather than taking on streaming for a route that
+doesn't need it.
+
+**Verified against the real failing case, not assumed fixed**: re-ran the
+identical local repro (novaprojectum.com, 13 pages, 541 elements) after
+the fix — `understandSite` now returns a real company summary instead of
+throwing. `pnpm typecheck && pnpm test` (362, all passing) both clean
+after the change.
+
+**Not done**: the CRON_SECRET gap above needs the user to set it in
+Vercel — not something available to fix from here. D5 (legal review) and
+§5C's auto-promote mode remain open per their original decisions.
