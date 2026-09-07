@@ -197,19 +197,13 @@ type PageClassification = {
 
 async function classify(
   crawl: { pages: CrawledPageResult[] },
-): Promise<{
-  method: UnderstandingMethod;
-  pages: PageClassification[];
-  understanding: Omit<WebsiteUnderstandingResult, "pages">;
-  understandingFailure: string | null;
-}> {
+): Promise<{ method: UnderstandingMethod; pages: PageClassification[]; understanding: Omit<WebsiteUnderstandingResult, "pages"> }> {
   try {
     const result = await understandSite(crawl);
     return {
       method: "AI",
       pages: result.pages,
       understanding: result,
-      understandingFailure: null,
     };
   } catch (error) {
     // Falls back to the rule-based classifier on ANY understanding failure —
@@ -244,22 +238,10 @@ async function classify(
       })),
     }));
 
-    // TEMPORARY DIAGNOSTIC (2026-09-07, remove once the production-only
-    // understand() failure on real sites is root-caused): only console.error
-    // was ever recoverable, and production console logs weren't reachable
-    // from this debugging session. error.name/message never contains the
-    // API key itself (Anthropic errors don't echo it back), so this is safe
-    // to surface transiently — but it's not meant to stay user-facing.
-    const understandingFailure =
-      error instanceof AiNotConfiguredError
-        ? null
-        : `${error instanceof Error ? error.name : "Error"}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500);
-
     return {
       method: "HEURISTIC",
       pages,
       understanding: buildHeuristicUnderstanding(crawl.pages, classifiedByPageId),
-      understandingFailure,
     };
   }
 }
@@ -273,7 +255,7 @@ export async function runCrawlAndUnderstand(siteId: string): Promise<void> {
     const crawl = await crawlSite(site.url);
 
     await prisma.site.update({ where: { id: siteId }, data: { status: "UNDERSTANDING" } });
-    const { method, pages, understanding, understandingFailure } = await classify(crawl);
+    const { method, pages, understanding } = await classify(crawl);
 
     // A retry (or any second run) on a site that already crawled
     // successfully once would otherwise hit CrawledPage's
@@ -355,14 +337,7 @@ export async function runCrawlAndUnderstand(siteId: string): Promise<void> {
         },
       });
 
-      // TEMPORARY DIAGNOSTIC (2026-09-07, see the matching note in classify()):
-      // surfaces the real understand() failure reason even though the site
-      // still connects successfully — remove alongside understandingFailure
-      // once the production-only failure is root-caused.
-      await tx.site.update({
-        where: { id: siteId },
-        data: { status: "READY", errorMessage: understandingFailure },
-      });
+      await tx.site.update({ where: { id: siteId }, data: { status: "READY", errorMessage: null } });
     });
   } catch (error) {
     // The org only ever sees the cleaned, generic message (cleanErrorMessage)
