@@ -241,12 +241,14 @@
   // lets it complete even if the visitor navigates away immediately (the
   // common case right after a CTA click), and it never throws or blocks
   // the host page either way.
-  function reportEvent(apiBase, siteId, pageUrl, context, type, contentElementId, visitorKey, loadToken, consent) {
+  function reportEvent(apiBase, siteId, pageUrl, context, type, contentElementId, visitorKey, loadToken, consent, value, currency) {
     try {
       var body = { url: pageUrl.toString(), context: context, type: type, consent: consent };
       if (contentElementId) body.contentElementId = contentElementId;
       if (visitorKey) body.visitorKey = visitorKey;
       if (loadToken) body.loadToken = loadToken;
+      if (typeof value === "number") body.value = value;
+      if (currency) body.currency = currency;
       fetch(apiBase + "/api/embed/site/" + encodeURIComponent(siteId) + "/events", {
         method: "POST",
         credentials: "omit",
@@ -291,6 +293,35 @@
         ? window.crypto.randomUUID()
         : "l-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 
+    // Assigned once the elements response comes back and tells us whether
+    // tracking is on (see below) — declared here, not there, so
+    // trackConversion's closure always reads whatever the *current* value
+    // is at call time, not whatever it was when trackConversion itself was
+    // defined a few lines down.
+    var visitorKey;
+
+    // Public conversion-tracking API: the one thing this script can't ever
+    // infer from the DOM on its own. A customer's own page calls this
+    // directly — typically on a thank-you/order-confirmation page after a
+    // form submits or a purchase completes — to report a real LEAD or
+    // SALE. Mirrors the exact mental model of a GA4/Meta Pixel conversion
+    // event, since that's what anyone integrating this will already
+    // expect. Defined synchronously, immediately, not deferred until the
+    // elements fetch below resolves: a thank-you page firing this on its
+    // own load must never find `window.dynamify.trackConversion` missing
+    // and throw on the host page — same "never blocks the host page"
+    // posture as everything else in this file. If called before the
+    // elements response comes back, `visitorKey` just isn't set yet — the
+    // event is still recorded, anonymously, same as any other event this
+    // early.
+    window.dynamify.trackConversion = function (details) {
+      details = details || {};
+      if (details.type !== "LEAD" && details.type !== "SALE") return;
+      var value = typeof details.value === "number" ? details.value : undefined;
+      var currency = typeof details.currency === "string" ? details.currency : undefined;
+      reportEvent(apiBase, siteId, pageUrl, context, details.type, undefined, visitorKey, loadToken, window.dynamify.consent, value, currency);
+    };
+
     var params = new URLSearchParams();
     params.set("url", pageUrl.toString());
     if (context.device) params.set("device", context.device);
@@ -328,8 +359,10 @@
         // opted in *and* the visitor has given analytics consent —
         // anonymous otherwise. The page-view beacon below waits for this
         // response specifically so it can carry the right visitorKey
-        // from its very first event, not just later ones.
-        var visitorKey = data.visitorTrackingEnabled && consent.analytics ? getOrSetVisitorId() : undefined;
+        // from its very first event, not just later ones. Assigns the
+        // `var visitorKey` declared earlier in run() (not a new one) —
+        // trackConversion's closure needs to see this same variable.
+        visitorKey = data.visitorTrackingEnabled && consent.analytics ? getOrSetVisitorId() : undefined;
         reportEvent(apiBase, siteId, pageUrl, context, "PAGE_VIEW", undefined, visitorKey, loadToken, consent);
 
         var results = [];

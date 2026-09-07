@@ -18,10 +18,12 @@ async function seedEvent(
   organizationId: string,
   siteId: string,
   crawledPageId: string,
-  type: "PAGE_VIEW" | "CTA_CLICK",
+  type: "PAGE_VIEW" | "CTA_CLICK" | "LEAD" | "SALE",
   personalized: boolean,
   count = 1,
   heldOut = false,
+  value?: number,
+  currency?: string,
 ) {
   await prisma.siteEvent.createMany({
     data: Array(count).fill({
@@ -31,6 +33,8 @@ async function seedEvent(
       type,
       personalized,
       heldOut,
+      value,
+      currency,
       context: {},
     }),
   });
@@ -64,7 +68,72 @@ describe("getOrgAnalytics", () => {
       personalizedPageViews: 10,
       ctaClicks: 2,
       personalizedCtaClicks: 3,
+      leads: 0,
+      personalizedLeads: 0,
+      sales: 0,
+      personalizedSales: 0,
+      revenue: null,
+      personalizedRevenue: null,
     });
+  });
+
+  it("counts leads and revenue, split by personalized vs. generic, separately from CTA clicks", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site, page } = await seedSiteWithPage(organization.id);
+
+    await seedEvent(organization.id, site.id, page.id, "LEAD", false, 4);
+    await seedEvent(organization.id, site.id, page.id, "LEAD", true, 2);
+    await seedEvent(organization.id, site.id, page.id, "SALE", false, 2, false, 50, "USD");
+    await seedEvent(organization.id, site.id, page.id, "SALE", true, 1, false, 200, "USD");
+
+    const analytics = await getOrgAnalytics(organization.id);
+
+    // Same generic-vs-personalized split convention as pageViews/ctaClicks
+    // — `leads`/`sales`/`revenue` are the generic-only counts, not a
+    // combined total, with the personalized count always a separate field.
+    expect(analytics.totals.leads).toBe(4);
+    expect(analytics.totals.personalizedLeads).toBe(2);
+    expect(analytics.totals.sales).toBe(2);
+    expect(analytics.totals.personalizedSales).toBe(1);
+    expect(analytics.totals.revenue).toBe(100);
+    expect(analytics.totals.personalizedRevenue).toBe(200);
+
+    const row = analytics.perSite[0];
+    expect(row.leads).toBe(4);
+    expect(row.personalizedLeads).toBe(2);
+    expect(row.sales).toBe(2);
+    expect(row.personalizedSales).toBe(1);
+    expect(row.revenue).toBe(100);
+    expect(row.personalizedRevenue).toBe(200);
+  });
+
+  it("revenue is null (not 0) when no SALE has ever included a value, even with real sales counted", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site, page } = await seedSiteWithPage(organization.id);
+
+    await seedEvent(organization.id, site.id, page.id, "SALE", false, 3); // no value/currency
+
+    const analytics = await getOrgAnalytics(organization.id);
+
+    expect(analytics.totals.sales).toBe(3);
+    expect(analytics.totals.revenue).toBeNull();
+    expect(analytics.perSite[0].revenue).toBeNull();
+  });
+
+  it("a held-out LEAD/SALE counts as generic, not personalized — there's no holdout bucket for goals yet", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site, page } = await seedSiteWithPage(organization.id, "https://example.com", 50);
+
+    // heldOut=true always implies personalized=false at the DB layer
+    // (src/lib/embed/service.ts) — this seeds exactly that real shape.
+    await seedEvent(organization.id, site.id, page.id, "SALE", false, 1, true, 75, "USD");
+
+    const analytics = await getOrgAnalytics(organization.id);
+
+    expect(analytics.totals.sales).toBe(1);
+    expect(analytics.totals.revenue).toBe(75);
+    expect(analytics.perSite[0].personalizedSales).toBe(0);
+    expect(analytics.perSite[0].personalizedRevenue).toBeNull();
   });
 
   it("computes generic and personalized conversion rate as independent ratios", async () => {

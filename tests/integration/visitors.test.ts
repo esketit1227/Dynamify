@@ -202,6 +202,81 @@ describe("recordSiteEvent — SiteVisitor (opt-in visitor tracking)", () => {
     expect(conversions).toHaveLength(1);
   });
 
+  it("records a LEAD as a real Conversion with no value, for a tracked visitor", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site } = await seedSite(organization.id, true);
+
+    // No contentElementId at all — unlike CTA_CLICK, a lead isn't tied to
+    // any one crawled element.
+    await recordSiteEvent(
+      site.id,
+      "https://example.com",
+      { device: "desktop" },
+      undefined,
+      { type: "LEAD" },
+      "visitor-1",
+      undefined,
+      TRACKED,
+    );
+
+    const visitor = await prisma.siteVisitor.findFirstOrThrow({ where: { siteId: site.id } });
+    const event = await prisma.siteEvent.findFirstOrThrow({ where: { siteId: site.id, type: "LEAD" } });
+    expect(event.value).toBeNull();
+    expect(event.currency).toBeNull();
+
+    const session = await prisma.visitorSession.findFirstOrThrow({ where: { visitorId: visitor.id } });
+    const conversion = await prisma.conversion.findFirstOrThrow({ where: { sessionId: session.id } });
+    expect(conversion.siteEventId).toBe(event.id);
+    expect(conversion.value).toBeNull();
+  });
+
+  it("records a SALE with a real value/currency, finally populating Conversion.value for real", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site } = await seedSite(organization.id, true);
+
+    await recordSiteEvent(
+      site.id,
+      "https://example.com",
+      { device: "desktop" },
+      undefined,
+      { type: "SALE", value: 49.99, currency: "USD" },
+      "visitor-1",
+      undefined,
+      TRACKED,
+    );
+
+    const event = await prisma.siteEvent.findFirstOrThrow({ where: { siteId: site.id, type: "SALE" } });
+    expect(event.value).toBe(49.99);
+    expect(event.currency).toBe("USD");
+
+    const visitor = await prisma.siteVisitor.findFirstOrThrow({ where: { siteId: site.id } });
+    const session = await prisma.visitorSession.findFirstOrThrow({ where: { visitorId: visitor.id } });
+    const conversion = await prisma.conversion.findFirstOrThrow({ where: { sessionId: session.id } });
+    expect(conversion.value).toBe(49.99);
+    expect(conversion.currency).toBe("USD");
+  });
+
+  it("still records the anonymous SiteEvent (with its value) for a LEAD/SALE when the site has no visitor tracking", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site } = await seedSite(organization.id, false);
+
+    await recordSiteEvent(
+      site.id,
+      "https://example.com",
+      { device: "desktop" },
+      undefined,
+      { type: "SALE", value: 10, currency: "EUR" },
+    );
+
+    const event = await prisma.siteEvent.findFirstOrThrow({ where: { siteId: site.id, type: "SALE" } });
+    expect(event.value).toBe(10);
+    expect(event.currency).toBe("EUR");
+    expect(event.visitorId).toBeNull();
+    // No tracked visitor exists to hang a Conversion off — same posture
+    // as CTA_CLICK's existing untracked behavior.
+    expect(await prisma.conversion.count()).toBe(0);
+  });
+
   // Found via live verification, not hypothetical: two near-simultaneous
   // events for the same visitor (e.g. two tabs) must not lose an
   // increment. See upsertSiteVisitor's row-lock comment for the fix.

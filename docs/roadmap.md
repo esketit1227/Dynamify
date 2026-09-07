@@ -2489,3 +2489,153 @@ the real, clickable sources next to the summary are the verification
 mechanism here, not a second LLM call; D8/D10 (design-only, no live
 delivery) are completely unaffected — this only changes what *informs* a
 design, not what a design *is* or whether it can ever reach a visitor.
+
+### 2026-09-08 — Lead/Sale Event Tracking: a real conversion goal, not just a CTA-click proxy
+
+Requested directly, alongside the Multi-Armed Bandit (handled separately —
+see below). Real gap this closes: `Conversion.value`/`goalId`/`currency`
+have existed in the schema since the visitor-data rebuild
+(docs/decisions.md D5's widening) but were **never once populated** —
+confirmed by grep before starting — because the only thing that ever
+created a `Conversion` row was a `CTA_CLICK`, and a click has no inherent
+dollar value. product-spec.md §20 lists "conversions" and "revenue where
+available" as things to track; Phase 6's analytics slice explicitly
+scoped both out for exactly this reason ("no goal-definition mechanism
+exists," "revenue... has no data source"). This is that data source.
+
+**Built:**
+- `SiteEventType` gains `LEAD`/`SALE`; `SiteEvent` gains `value Float?`/
+  `currency String?` — set only when the customer's own page actually
+  reports one, never inferred or defaulted.
+- `window.dynamify.trackConversion({type: "LEAD"|"SALE", value?, currency?})`
+  — the one genuinely new public surface on `dynamify-embed.js`, and the
+  first time this script has ever exposed anything beyond consent
+  management. Defined synchronously at the top of `run()`, not deferred
+  into the async elements-fetch callback, so a thank-you/confirmation
+  page calling this on its own load can never find the function missing
+  and throw on the host page — same "never blocks the host page" posture
+  as everything else in this file.
+- The public events route (`.../events/route.ts`) validates `value`
+  (finite, non-negative, capped at 10,000,000 — a sanity ceiling, not a
+  business rule) and `currency` (a 3-letter ISO 4217 code), and requires
+  currency whenever a value is given — a bare number is ambiguous across
+  multi-currency customers. `contentElementId` stays CTA_CLICK-only, as
+  before; a lead/sale isn't tied to any one crawled element.
+- `recordSiteEvent`/`createConversion` now fire for LEAD/SALE exactly the
+  way they already did for CTA_CLICK — same tenant-isolation posture, same
+  visitor-tracking/consent gating on whether a `Conversion` row gets
+  created — finally writing real data into `Conversion.value`/`currency`
+  for the first time since those columns existed.
+- `getOrgAnalytics` gained `leads`/`sales`/`revenue` (and their
+  `personalized*` counterparts), aggregated with the exact same
+  generic-vs-personalized `groupBy` pattern already used for pageViews/
+  ctaClicks — `revenue` is `null` (not `0`) specifically when no SALE has
+  ever included a value, distinct from a real sale that happened to omit
+  one. Surfaced on the Analytics page as a new "Leads & sales" stat
+  section (hidden entirely when a site has never reported either) and a
+  new per-site table column.
+
+**A real gap found while building this, stated rather than silently
+handled**: revenue is a raw sum across whatever currencies were actually
+reported, with no conversion. This is fine for the overwhelming common
+case (one merchant, one currency) but would silently produce a
+meaningless number for a merchant who reports sales in more than one —
+documented explicitly on the type (`OrgAnalytics`'s `revenue` field) and
+in the UI (no currency symbol is ever shown, since assuming one would
+misrepresent data that might not be in it). A real per-currency rollup is
+separate, unstarted scope, not something to fake here.
+
+**Deliberately NOT done, same "smallest robust version" reasoning as
+everywhere else**: no configurable custom-goal system (product-spec's
+`Conversion.goalId` stays null) — LEAD/SALE as two fixed, built-in event
+types is a real, smaller slice of that deferred idea, not the whole
+thing; leads/sales are NOT wired into the causal-lift/significance test
+(`src/lib/analytics/significance.ts`) — that machinery was built and
+tested against CTA_CLICK specifically, and widening what it measures is
+a real, separate decision that deserves its own pass, not a side effect
+of adding a new event type; the long-dead `WebhookSubscription`
+`CONVERSION`/`FORM_SUBMIT` event types at `/integrations` were found to
+be **completely unreachable dead code** (wired to the retired
+`Page`/`PageVersion` model's `/api/collect`, which 404s for every real
+request today since nothing ever creates a `Page` row) — a real,
+pre-existing, user-facing bug (a customer can configure a webhook for
+these today and it will never fire, with no indication anything's wrong)
+that a naive read might assume this feature just fixed. It didn't — this
+is a separate, real gap, flagged here rather than silently left
+implying it now works.
+
+Verified live against the real running dev server: valid LEAD (no value)
+and SALE (with value+currency) both accepted and stored correctly; value
+without currency, malformed currency casing, a value over the cap, and a
+negative value were all correctly rejected with zero rows created;
+confirmed LEAD/SALE genuinely don't require `contentElementId` while
+CTA_CLICK still does; confirmed `getOrgAnalytics` aggregated the resulting
+real rows correctly (2 leads, 1 sale, exact revenue sum). Then seeded a
+larger, realistic mix and drove the actual `/analytics` page in a real
+browser — the new stat cards and per-site column rendered the exact real
+numbers (leads/sales split correctly by personalized/generic, revenue
+summed correctly per bucket), zero console errors. `pnpm typecheck &&
+pnpm lint && pnpm test (481, 21 new: analytics-aggregation tests in
+tests/integration/analytics.test.ts covering the personalized/generic
+split, the null-vs-zero revenue distinction, and the held-out-counts-as-
+generic rule; recordSiteEvent/Conversion tests in
+tests/integration/visitors.test.ts covering a valued SALE, a valueless
+LEAD, and the untracked-site case) && pnpm build` all clean. All seeded
+data removed afterward.
+
+### 2026-09-08 — A visual "Content" page: annotated live view instead of a text accordion
+
+The user's own words: the old "Content by page" section (bottom of the
+Site detail page) was "too much text, not clear" — a flat, capped-at-3
+accordion (`HEADLINE: Ship personalized pages...`) — and should be its
+own section, next to Recommendations, "more visual, with active live
+view, annotations." Confirmed directly: a separate page with its own nav
+entry, org-wide (every crawled page across every site), not a section
+bolted onto `/recommendations`.
+
+Nothing about "live view + annotations" needed building from scratch —
+`RenderedPreview` already renders a real page visually with click-to-
+select, and `resolve({}, definition)` (already used for Live View's own
+"default visitor" reference panel) already works standalone with zero
+personalization rules. This is a new, focused front door onto that
+existing pipeline: `/content` (org-wide grid) → `/content/[pageId]`
+(one page, live and annotated).
+
+**Grid**: real crawled content, not a fabricated thumbnail — one real
+headline string per card, neutral (no new color tokens — CLAUDE.md's
+"restrained palette," and the existing design system only has two
+decorative categorical hues, not enough for 9 `ContentSection` values)
+section-count pills, a "N personalizable" badge. Four lean, parallel,
+`organizationId`-indexed queries (`src/lib/content/service.ts`) instead
+of one `findMany({ include: { elements: true } })`, which would pull
+every element's full text org-wide just to compute counts.
+
+**Detail**: one `RenderedPreview`, `onElementClick` always wired, backed
+by a new optional `annotations` prop (additive — Live View passes
+nothing new, unchanged there): a persistent dot on already-personalized
+elements (visible without hovering — "how much of this page is
+personalizable" at a glance) and a floating "Section · Type" label on
+hover/selection — the concrete match for the reference screenshot's
+annotation-tooltip pattern. Clicking opens the same `ReviewPanel`/
+`ElementPersonalize` flow Live View already uses — extracted `ReviewPanel`
+into its own file (`src/components/liveview/review-panel.tsx`) now that
+a second consumer exists, and relocated `LIBRARY_TYPES`/`buildLibrary`
+out of `site-detail.tsx` into `src/lib/sites/library.ts` so both pages
+(and Live View, which already depended on the old location) share one
+definition. Explicit non-goal: the drag-and-drop layout editor from the
+third reference image — nothing in the data model supports user-authored
+element order (`ContentElement.order` is crawl-derived); only the
+floating-tooltip affordance was in scope.
+
+The old "Content by page" accordion is gone from Sites, replaced with a
+single pointer link into `/content?site=...`.
+
+**Verified live**, not just typechecked: connected a real site, confirmed
+the grid renders real headlines/section counts, opened a page, hovered
+an element (the "Hero · Headline" tooltip appeared), clicked it (`ReviewPanel`
+opened correctly, `ElementPersonalize` inside it functioned), and confirmed
+Live View still works unchanged (persona selection, no console/network
+errors) after the `ReviewPanel`/`LIBRARY_TYPES` extractions. `pnpm typecheck
+&& pnpm lint && pnpm test (10 new in tests/integration/content.test.ts,
+covering counts/headline-selection/org-scoping for `listContentPages` and
+`getSiteWideImageLibrary`) && pnpm build` all clean.

@@ -20,6 +20,24 @@ function formatRate(rate: number | null): string {
   return rate === null ? "Not enough data yet" : `${(rate * 100).toFixed(1)}%`;
 }
 
+// Deliberately no currency symbol — revenue is a raw sum across whatever
+// currencies were actually reported (see OrgAnalytics.revenue's own
+// comment on the single-currency assumption this makes), so prefixing a
+// specific symbol would misrepresent data that might not be in that
+// currency at all.
+function formatRevenue(revenue: number | null): string {
+  return revenue === null ? "No revenue reported yet" : revenue.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function RevenueCard({ label, revenue }: { label: string; revenue: number | null }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <p className="text-xs text-muted">{label}</p>
+      <p className="mt-1 text-2xl font-semibold text-foreground">{formatRevenue(revenue)}</p>
+    </div>
+  );
+}
+
 function RateCard({ label, rate }: { label: string; rate: number | null }) {
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
@@ -160,6 +178,29 @@ export default async function AnalyticsPage() {
             <StatCard label="Personalized CTA clicks" value={analytics.totals.personalizedCtaClicks} />
           </div>
 
+          {analytics.totals.leads > 0 ||
+          analytics.totals.personalizedLeads > 0 ||
+          analytics.totals.sales > 0 ||
+          analytics.totals.personalizedSales > 0 ? (
+            <div>
+              <h2 className="mb-3 text-sm font-semibold text-foreground">Leads &amp; sales</h2>
+              <p className="mb-3 text-xs text-muted">
+                Reported directly by your own page (window.dynamify.trackConversion) — a real lead or sale, not
+                a proxy like a CTA click.
+              </p>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                <StatCard label="Leads" value={analytics.totals.leads} />
+                <StatCard label="Personalized leads" value={analytics.totals.personalizedLeads} />
+                <div className="hidden sm:block" />
+                <StatCard label="Sales" value={analytics.totals.sales} />
+                <StatCard label="Personalized sales" value={analytics.totals.personalizedSales} />
+                <div className="hidden sm:block" />
+                <RevenueCard label="Revenue" revenue={analytics.totals.revenue} />
+                <RevenueCard label="Personalized revenue" revenue={analytics.totals.personalizedRevenue} />
+              </div>
+            </div>
+          ) : null}
+
           <div>
             <h2 className="mb-3 text-sm font-semibold text-foreground">Generic vs. personalized</h2>
             <div className="grid grid-cols-2 gap-4">
@@ -208,34 +249,54 @@ export default async function AnalyticsPage() {
                     <th className="px-4 py-2 font-medium">Site</th>
                     <th className="px-4 py-2 font-medium">Views</th>
                     <th className="px-4 py-2 font-medium">CTA clicks</th>
+                    <th className="px-4 py-2 font-medium">Leads / sales</th>
                     <th className="px-4 py-2 font-medium">Generic rate</th>
                     <th className="px-4 py-2 font-medium">Personalized rate</th>
                     <th className="px-4 py-2 font-medium">Causal verdict</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {analytics.perSite.map((row) => (
-                    <tr key={row.siteId} className="border-b border-border last:border-0">
-                      <td className="px-4 py-2 text-foreground">{row.siteUrl}</td>
-                      <td className="px-4 py-2">
-                        {row.pageViews.toLocaleString()} generic · {row.personalizedPageViews.toLocaleString()}{" "}
-                        personalized
-                      </td>
-                      <td className="px-4 py-2">
-                        {row.ctaClicks.toLocaleString()} generic · {row.personalizedCtaClicks.toLocaleString()}{" "}
-                        personalized
-                      </td>
-                      <td className="px-4 py-2">{formatRate(row.genericConversionRate)}</td>
-                      <td className="px-4 py-2">{formatRate(row.personalizedConversionRate)}</td>
-                      <td className="px-4 py-2">
-                        {row.causalLift ? (
-                          <SiteVerdictBadge causalLift={row.causalLift} />
-                        ) : (
-                          <span className="text-xs text-muted">{row.holdbackPercent > 0 ? "No holdout data yet" : "Holdout off"}</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {analytics.perSite.map((row) => {
+                    const totalLeads = row.leads + row.personalizedLeads;
+                    const totalSales = row.sales + row.personalizedSales;
+                    const hasRevenue = row.revenue !== null || row.personalizedRevenue !== null;
+                    const totalRevenue = hasRevenue ? (row.revenue ?? 0) + (row.personalizedRevenue ?? 0) : null;
+
+                    return (
+                      <tr key={row.siteId} className="border-b border-border last:border-0">
+                        <td className="px-4 py-2 text-foreground">{row.siteUrl}</td>
+                        <td className="px-4 py-2">
+                          {row.pageViews.toLocaleString()} generic · {row.personalizedPageViews.toLocaleString()}{" "}
+                          personalized
+                        </td>
+                        <td className="px-4 py-2">
+                          {row.ctaClicks.toLocaleString()} generic · {row.personalizedCtaClicks.toLocaleString()}{" "}
+                          personalized
+                        </td>
+                        <td className="px-4 py-2">
+                          {totalLeads === 0 && totalSales === 0 ? (
+                            <span className="text-xs text-muted">None reported</span>
+                          ) : (
+                            <>
+                              {totalLeads.toLocaleString()} leads · {totalSales.toLocaleString()} sales
+                              {hasRevenue ? (
+                                <span className="block text-xs text-muted">{formatRevenue(totalRevenue)} revenue</span>
+                              ) : null}
+                            </>
+                          )}
+                        </td>
+                        <td className="px-4 py-2">{formatRate(row.genericConversionRate)}</td>
+                        <td className="px-4 py-2">{formatRate(row.personalizedConversionRate)}</td>
+                        <td className="px-4 py-2">
+                          {row.causalLift ? (
+                            <SiteVerdictBadge causalLift={row.causalLift} />
+                          ) : (
+                            <span className="text-xs text-muted">{row.holdbackPercent > 0 ? "No holdout data yet" : "Holdout off"}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -100,7 +100,11 @@ export async function upsertSession(
   organizationId: string,
   visitorId: string,
   context: SessionContext,
-  eventType: "PAGE_VIEW" | "CTA_CLICK",
+  // LEAD/SALE increment neither counter below — they're a distinct
+  // conversion-goal signal, not a page view or a click — but still need
+  // to be accepted here since they still open/extend a session like any
+  // other event.
+  eventType: "PAGE_VIEW" | "CTA_CLICK" | "LEAD" | "SALE",
 ): Promise<string> {
   const now = new Date();
   const latest = await prisma.visitorSession.findFirst({
@@ -178,14 +182,20 @@ export async function recordImpressions(
 // A real, stored, timestamped conversion fact, replacing the previous
 // derived-at-read-time "ctaClickCount > 0" boolean. goalId stays null —
 // no configurable-goal concept exists in this product yet
-// (docs/roadmap.md Phase 6 explicitly deferred one, on purpose).
+// (docs/roadmap.md Phase 6 explicitly deferred one, on purpose — LEAD/SALE
+// as fixed built-in event types is a smaller, real slice of that, not the
+// full custom-goal system). value/currency finally populate the fields
+// this model always had but nothing ever wrote — only ever set for a
+// LEAD/SALE the customer's own page actually reported.
 export async function createConversion(
   organizationId: string,
   sessionId: string,
   siteEventId: string,
+  value?: number,
+  currency?: string,
 ): Promise<void> {
   await prisma.conversion.create({
-    data: { organizationId, sessionId, siteEventId },
+    data: { organizationId, sessionId, siteEventId, value, currency },
   });
 }
 

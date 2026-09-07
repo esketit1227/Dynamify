@@ -1,4 +1,4 @@
-import { LayoutDashboard, Globe, Target, Users, Eye, BarChart3, Plug, Settings, Lightbulb, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Globe, Target, Users, Eye, BarChart3, Plug, Settings, Lightbulb, LayoutGrid, type LucideIcon } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -27,6 +27,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { href: "/audiences", label: "Audiences", icon: Target },
       { href: "/recommendations", label: "Recommendations", icon: Lightbulb },
+      { href: "/content", label: "Content", icon: LayoutGrid },
       { href: "/visitors", label: "Visitors", icon: Users },
       { href: "/live-view", label: "Live View", icon: Eye },
       { href: "/analytics", label: "Analytics", icon: BarChart3 },

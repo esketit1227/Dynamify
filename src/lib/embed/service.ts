@@ -150,7 +150,7 @@ async function upsertSiteVisitor(
   crawledPageId: string,
   pageTitle: string | null,
   context: VisitorContext,
-  eventType: "PAGE_VIEW" | "CTA_CLICK",
+  eventType: "PAGE_VIEW" | "CTA_CLICK" | "LEAD" | "SALE",
   consent: ConsentState,
 ): Promise<string> {
   // Resolved before the row lock below — findOrCreateCompany's own
@@ -430,12 +430,16 @@ export function wasPersonalized(resolved: ResolvedPage, contentElementId?: strin
 // a third, independent thing: whether known attributes are *used* to
 // decide what to show. Silently does nothing at all for an unknown/
 // not-ready site or never-crawled URL, same posture as getEmbedElements.
+export type RecordSiteEventOptions =
+  | { type: "CTA_CLICK"; contentElementId: string }
+  | { type: "LEAD" | "SALE"; value?: number; currency?: string };
+
 export async function recordSiteEvent(
   siteId: string,
   rawUrl: string,
   context: VisitorContext,
   visitorIp?: string,
-  options?: { type: "CTA_CLICK"; contentElementId: string },
+  options?: RecordSiteEventOptions,
   visitorKey?: string,
   loadToken?: string,
   consent: ConsentState = DEFAULT_CONSENT,
@@ -471,13 +475,15 @@ export async function recordSiteEvent(
   const resolved = resolve(effectiveContext ?? {}, definition);
 
   let contentElementId: string | undefined;
-  if (options) {
+  if (options?.type === "CTA_CLICK") {
     // The clicked element must actually be a member of *this* resolved
     // page — getLiveViewDefinition is scoped by page.organizationId, never
     // client input, so this is the tenant-isolation check for the one
     // place this public endpoint takes a client-supplied id: a made-up or
     // foreign-site id simply isn't found here, and the event is dropped
-    // rather than recorded against the wrong site's analytics.
+    // rather than recorded against the wrong site's analytics. LEAD/SALE
+    // have no contentElementId at all — a conversion isn't tied to any
+    // one crawled element, so there's nothing to check here for them.
     if (!resolved.components.some((c) => c.id === options.contentElementId)) return;
     contentElementId = options.contentElementId;
   }
@@ -504,6 +510,7 @@ export async function recordSiteEvent(
   const seed = visitorKey ?? loadToken;
   const heldOut = computeHeldOut(page.holdbackPercent, wouldPersonalize, seed);
 
+  const isLeadOrSale = options?.type === "LEAD" || options?.type === "SALE";
   const siteEvent = await prisma.siteEvent.create({
     data: {
       organizationId: page.organizationId,
@@ -512,6 +519,8 @@ export async function recordSiteEvent(
       contentElementId,
       visitorId,
       type: options?.type ?? "PAGE_VIEW",
+      value: isLeadOrSale ? options.value : undefined,
+      currency: isLeadOrSale ? options.currency : undefined,
       personalized: wouldPersonalize && !heldOut,
       heldOut,
       context: (effectiveContext ?? {}) as object,
@@ -557,8 +566,14 @@ export async function recordSiteEvent(
       await recordImpressions(page.organizationId, sessionId, page.id, impressions);
     }
 
-    if (options?.type === "CTA_CLICK") {
-      await createConversion(page.organizationId, sessionId, siteEvent.id);
+    if (options?.type === "CTA_CLICK" || isLeadOrSale) {
+      await createConversion(
+        page.organizationId,
+        sessionId,
+        siteEvent.id,
+        isLeadOrSale ? options.value : undefined,
+        isLeadOrSale ? options.currency : undefined,
+      );
     }
   }
 }

@@ -3,6 +3,7 @@
 import { useMemo, type KeyboardEvent } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { ResolvedPage } from "@dynamify/personalization-sdk";
+import { elementTypeLabel, sectionLabel as formatSectionLabel } from "@/lib/format/labels";
 
 // The signature moment (docs/roadmap.md's Live View redesign note): when
 // the persona changes, each personalized element lifts away and the new
@@ -87,6 +88,7 @@ export function RenderedPreview({
   label,
   onElementClick,
   selectedComponentId,
+  annotations,
 }: {
   resolved: ResolvedPage;
   pageUrl: string;
@@ -102,6 +104,15 @@ export function RenderedPreview({
   // from before this existed.
   onElementClick?: (componentId: string) => void;
   selectedComponentId?: string | null;
+  // The /content page's "browse visually, before you click anything"
+  // annotations — additive and optional, Live View passes nothing here and
+  // is visually unchanged. Keyed by component.id (== ContentElement.id).
+  // A persistent dot marks elements that already have a live rule (no
+  // hover needed — "how much of this page is personalized" should be
+  // visible at a glance); a floating type/section label appears on hover
+  // or when selected, the concrete match for the reference screenshot's
+  // "Sections / Add Column" annotation tooltip.
+  annotations?: Map<string, { hasPersonalization: boolean }>;
 }) {
   const reduceMotion = Boolean(useReducedMotion());
 
@@ -167,8 +178,9 @@ export function RenderedPreview({
 
             const clickable = Boolean(onElementClick);
             const selected = selectedComponentId === component.id;
+            const annotation = annotations?.get(component.id);
             const wrapperClassName = clickable
-              ? `-mx-2 cursor-pointer rounded-lg px-2 py-1 ring-1 ring-transparent transition-colors hover:bg-background hover:ring-foreground/25 ${
+              ? `group relative -mx-2 cursor-pointer rounded-lg px-2 py-1 ring-1 ring-transparent transition-colors hover:bg-background hover:ring-foreground/25 ${
                   selected ? "bg-background ring-2 ring-foreground" : ""
                 }`
               : "";
@@ -187,11 +199,34 @@ export function RenderedPreview({
                 }
               : {};
 
+            const annotationLabel = component.section
+              ? `${formatSectionLabel(component.section)} · ${elementTypeLabel(component.type)}`
+              : elementTypeLabel(component.type);
+            const annotationMarkup = annotation ? (
+              <>
+                {annotation.hasPersonalization ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -right-1 -top-1 z-10 h-2 w-2 rounded-full bg-[var(--status-positive)]"
+                  />
+                ) : null}
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute -top-2.5 left-2 z-10 whitespace-nowrap rounded-full bg-foreground px-2 py-0.5 text-[10px] font-medium text-background opacity-0 transition-opacity group-hover:opacity-100 ${
+                    selected ? "opacity-100" : ""
+                  }`}
+                >
+                  {annotationLabel}
+                </span>
+              </>
+            ) : null;
+
             if (component.type === "IMAGE" || component.type === "LOGO") {
               if (!looksLikeUrl(text)) return null;
               return (
                 <div key={component.id} className={wrapperClassName} {...wrapperProps}>
                   {sectionLabel}
+                  {annotationMarkup}
                   {/* Arbitrary customer-supplied URL, not a known remote-domain
                       allowlist next/image needs — same posture as
                       element-personalize.tsx's own image preview. */}
@@ -205,6 +240,7 @@ export function RenderedPreview({
               return (
                 <div key={component.id} className={wrapperClassName} {...wrapperProps}>
                   {sectionLabel}
+                  {annotationMarkup}
                   <span className="inline-flex w-fit rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background">
                     <AnimatedText
                       value={text}
@@ -230,6 +266,7 @@ export function RenderedPreview({
             return (
               <div key={component.id} className={wrapperClassName} {...wrapperProps}>
                 {sectionLabel}
+                {annotationMarkup}
                 <AnimatedText
                   value={text}
                   personalized={personalized}

@@ -26,15 +26,31 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 };
 
+// Reasonable sanity ceiling, not a real business limit — this is
+// aggregate analytics, not a payment amount actually being charged
+// anywhere, but an unbounded number would still let one malformed or
+// malicious report skew a site's revenue totals arbitrarily.
+const MAX_CONVERSION_VALUE = 10_000_000;
+
 const bodySchema = z
   .object({
     url: z.string().max(2000),
     context: visitorContextSchema,
-    type: z.enum(["PAGE_VIEW", "CTA_CLICK"]).default("PAGE_VIEW"),
+    type: z.enum(["PAGE_VIEW", "CTA_CLICK", "LEAD", "SALE"]).default("PAGE_VIEW"),
     // Which ContentElement was clicked — required for CTA_CLICK, ignored
     // otherwise. recordSiteEvent re-validates this belongs to the
     // resolved page before trusting it for anything; this is just shape.
     contentElementId: z.string().min(1).max(64).optional(),
+    // LEAD/SALE only — window.dynamify.trackConversion's optional amount.
+    // currency is required whenever value is present (a bare number is
+    // ambiguous across multi-currency customers); both are ignored for
+    // every other event type regardless of what a client sends (the
+    // route only ever forwards them for LEAD/SALE — see options below).
+    value: z.number().finite().nonnegative().max(MAX_CONVERSION_VALUE).optional(),
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code")
+      .optional(),
     // The embed script's dynamify_vid cookie value, sent only when the
     // site has visitor tracking enabled. recordSiteEvent ignores this
     // entirely unless the site itself has opted in — this is just shape,
@@ -51,6 +67,10 @@ const bodySchema = z
   .refine((body) => body.type !== "CTA_CLICK" || body.contentElementId !== undefined, {
     message: "contentElementId is required for a CTA_CLICK event",
     path: ["contentElementId"],
+  })
+  .refine((body) => body.value === undefined || body.currency !== undefined, {
+    message: "currency is required whenever value is provided",
+    path: ["currency"],
   });
 
 export async function OPTIONS() {
@@ -84,7 +104,9 @@ export async function POST(
     const options =
       body.type === "CTA_CLICK"
         ? ({ type: "CTA_CLICK", contentElementId: body.contentElementId! } as const)
-        : undefined;
+        : body.type === "LEAD" || body.type === "SALE"
+          ? ({ type: body.type, value: body.value, currency: body.currency } as const)
+          : undefined;
     await recordSiteEvent(
       siteId,
       body.url,

@@ -3,17 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ElementPersonalize } from "@/components/sites/element-personalize";
 import { EmbedSnippet } from "@/components/sites/embed-snippet";
 import { IpEnrichmentToggle } from "@/components/sites/ip-enrichment-toggle";
 import { VisitorTrackingToggle } from "@/components/sites/visitor-tracking-toggle";
 import { HoldbackPercentInput } from "@/components/sites/holdback-percent-input";
 import { AutoApproveToggle } from "@/components/sites/auto-approve-toggle";
-import type { SiteDetailDTO, CrawledPageDTO } from "@/lib/sites/dto";
+import type { SiteDetailDTO } from "@/lib/sites/dto";
 import type { AudienceDTO } from "@/lib/audiences/dto";
-import { elementTypeLabel, sectionLabel } from "@/lib/format/labels";
 
 const IN_PROGRESS_STATUSES = new Set(["PENDING", "CRAWLING", "UNDERSTANDING"]);
 
@@ -24,144 +21,6 @@ const STATUS_LABEL: Record<string, string> = {
   READY: "Ready",
   FAILED: "Failed",
 };
-
-const MAX_ELEMENTS_SHOWN_PER_SECTION = 3;
-
-// Types with no free-text "content" to speak of — IMAGE_LIBRARY_TYPES'
-// personalize form offers a picker built from other real values of the
-// same type found elsewhere on the site (the "approved asset library" for
-// v1: reuse, never invent — same principle text personalization already
-// uses), instead of a free-text box.
-export const LIBRARY_TYPES = new Set(["IMAGE", "LOGO", "CTA_HREF"]);
-
-export type Library = Record<string, string[]>;
-
-function buildLibrary(pages: CrawledPageDTO["elements"][]): Library {
-  const seen: Record<string, Set<string>> = {};
-  for (const elements of pages) {
-    for (const el of elements) {
-      if (!LIBRARY_TYPES.has(el.elementType)) continue;
-      const set = seen[el.elementType] ?? (seen[el.elementType] = new Set());
-      set.add(el.currentContent);
-    }
-  }
-  const library: Library = {};
-  for (const [type, set] of Object.entries(seen)) library[type] = [...set];
-  return library;
-}
-
-function SectionGroup({
-  organizationId,
-  section,
-  elements,
-  audiences,
-  library,
-  onChanged,
-}: {
-  organizationId: string;
-  section: string;
-  elements: CrawledPageDTO["elements"];
-  audiences: AudienceDTO[];
-  library: Library;
-  onChanged: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const visible = expanded ? elements : elements.slice(0, MAX_ELEMENTS_SHOWN_PER_SECTION);
-  const remaining = elements.length - visible.length;
-
-  return (
-    <div className="mb-3 last:mb-0">
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
-        {sectionLabel(section)} <span className="normal-case text-muted/70">· {elements.length}</span>
-      </p>
-      <ul className="flex flex-col gap-2">
-        {visible.map((el) => (
-          <li key={el.id} className="text-sm text-foreground">
-            <p className="truncate">
-              <span className="text-xs text-muted">{elementTypeLabel(el.elementType)}:</span> {el.currentContent}
-            </p>
-            <ElementPersonalize
-              organizationId={organizationId}
-              element={el}
-              audiences={audiences}
-              library={library[el.elementType] ?? []}
-              onChanged={onChanged}
-            />
-          </li>
-        ))}
-      </ul>
-      {remaining > 0 ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          className="mt-1 inline-flex items-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:border-foreground/40"
-        >
-          +{remaining} more
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function PageCard({
-  organizationId,
-  page,
-  audiences,
-  library,
-  onChanged,
-}: {
-  organizationId: string;
-  page: CrawledPageDTO;
-  audiences: AudienceDTO[];
-  library: Library;
-  onChanged: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const bySection = new Map<string, typeof page.elements>();
-  for (const el of page.elements) {
-    const list = bySection.get(el.section) ?? [];
-    list.push(el);
-    bySection.set(el.section, list);
-  }
-
-  return (
-    <div className="rounded-2xl border border-border bg-surface">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left"
-      >
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{page.title ?? page.url}</p>
-          <p className="truncate text-xs text-muted">{page.url}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-3 pl-3">
-          <span className="text-xs text-muted">
-            {page.elements.length} {page.elements.length === 1 ? "element" : "elements"}
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground">
-            {open ? "Hide" : "View"}
-            <ChevronDown size={13} className={`transition-transform ${open ? "rotate-180" : ""}`} />
-          </span>
-        </div>
-      </button>
-      {open ? (
-        <div className="border-t border-border px-4 py-3">
-          {[...bySection.entries()].map(([section, elements]) => (
-            <SectionGroup
-              key={section}
-              organizationId={organizationId}
-              section={section}
-              elements={elements}
-              audiences={audiences}
-              library={library}
-              onChanged={onChanged}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 export function SiteDetail({
   organizationId,
@@ -258,7 +117,6 @@ export function SiteDetail({
   }
 
   const understanding = site.understanding;
-  const library = buildLibrary(site.pages.map((p) => p.elements));
   const imageCount = site.pages.reduce(
     (sum, p) => sum + p.elements.filter((el) => el.elementType === "IMAGE" || el.elementType === "LOGO").length,
     0,
@@ -388,19 +246,17 @@ export function SiteDetail({
       </div>
 
       <div>
-        <h2 className="mb-3 text-sm font-semibold text-foreground">Content by page</h2>
-        <div className="flex flex-col gap-3">
-          {site.pages.map((page) => (
-            <PageCard
-              key={page.id}
-              organizationId={organizationId}
-              page={page}
-              audiences={audiences}
-              library={library}
-              onChanged={refresh}
-            />
-          ))}
-        </div>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Content</h2>
+        <Link
+          href={`/content?site=${site.id}`}
+          className="flex items-center justify-between rounded-2xl border border-border bg-surface px-4 py-3 text-sm hover:border-foreground/40"
+        >
+          <span className="text-foreground">
+            Browse {site.pageCount} {site.pageCount === 1 ? "page" : "pages"} and {site.elementCount} elements
+            visually
+          </span>
+          <span className="text-muted">→</span>
+        </Link>
       </div>
     </div>
   );

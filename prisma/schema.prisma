@@ -870,6 +870,14 @@ model WebsiteUnderstanding {
 enum SiteEventType {
   PAGE_VIEW
   CTA_CLICK
+  // A real lead (form submit, demo request, trial signup) or a completed
+  // sale — reported by the customer's own page via
+  // window.dynamify.trackConversion({type, value?, currency?}), never
+  // inferred. Distinct from CTA_CLICK: a click is an interaction with
+  // content already on screen, this is the actual outcome a CTA is meant
+  // to produce. See SiteEvent.value/currency below.
+  LEAD
+  SALE
 }
 
 model SiteEvent {
@@ -903,6 +911,15 @@ model SiteEvent {
   // default), so every event recorded before this column existed reads
   // identically to one on a site that's never turned holdout on.
   heldOut          Boolean       @default(false)
+  // Set only for LEAD/SALE, and only when the customer's own page
+  // actually reported one — never inferred, never defaulted. currency is
+  // required whenever value is set (a bare number is ambiguous across
+  // multi-currency customers); both stay null for every other event type
+  // and for a LEAD/SALE that didn't include a value. Mirrors the
+  // long-existing but never-populated Conversion.value/currency
+  // (docs/visitor-data.md) — this is the first real writer of that shape.
+  value            Float?
+  currency         String?
   // The resolved VisitorContext for this view — device, geo, referrer,
   // utm.* — the raw material src/lib/recommendations/analyze.ts reads.
   context          Json
