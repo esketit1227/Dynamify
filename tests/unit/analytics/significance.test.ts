@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { twoProportionZTest, MIN_GROUP_SIZE } from "@/lib/analytics/significance";
+import { twoProportionZTest, confidenceLabel, MIN_GROUP_SIZE } from "@/lib/analytics/significance";
 
 describe("twoProportionZTest", () => {
   it("returns null when either group is below the minimum sample size", () => {
@@ -65,5 +65,23 @@ describe("twoProportionZTest", () => {
     expect(a!.significant).toBe(b!.significant);
     expect(a!.direction).toBe("higher");
     expect(b!.direction).toBe("lower");
+  });
+});
+
+// docs/launch-plan.md §5E — "p = 0.0086" and "99.1% confidence" say the
+// same thing; only one of them is a number a CMO can act on.
+describe("confidenceLabel", () => {
+  it("converts a p-value into a plain confidence percentage", () => {
+    expect(confidenceLabel(0.05)).toBe("95.0%");
+    expect(confidenceLabel(0.01)).toBe("99.0%");
+  });
+
+  it("never claims certainty, even for a vanishingly small p-value", () => {
+    expect(confidenceLabel(0.0000001)).toBe("99.9%+");
+    expect(confidenceLabel(0)).toBe("99.9%+");
+  });
+
+  it("rounds to one decimal place", () => {
+    expect(confidenceLabel(0.0086)).toBe("99.1%");
   });
 });

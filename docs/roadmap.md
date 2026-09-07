@@ -1887,3 +1887,58 @@ rather than trusting rendered text alone.
 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` all clean (359
 tests — no new ones this slice; the UI reuses `ElementPersonalize`'s
 already-tested actions rather than adding new business logic).
+
+### 2026-09-07 — Analytics in CMO language, and leading with the real number (docs/launch-plan.md §5E)
+
+"+41% conversion on your Enterprise segment, 95% confidence" was the
+plan's example. Checked what that would actually take before writing
+anything: true *per-audience* causal lift needs `SiteEvent` to know which
+audience a visitor matched, which it doesn't (only `personalized`/
+`heldOut` booleans exist, D7's design) — real schema work, contradicting
+this slice's own "presentation, not engineering" framing. Flagged rather
+than built silently; scoped down to what the existing data actually
+supports: the causal, holdout-backed number (already real, already
+computed) was buried as a caption sentence under a *weaker*, merely-
+correlational headline number, on a separate page a CMO has no routine
+reason to open. Fixed both.
+
+- `confidenceLabel` (`src/lib/analytics/significance.ts`) — a p-value
+  becomes "97.3% confidence," not "p = 0.0086." Same fact, one version a
+  CMO can act on. Capped at "99.9%+" — significance is never certainty,
+  so display never claims it is.
+- Home now leads with the *causal* lift number once a site has real
+  holdout data (`hasVerifiedLift`), not the correlational one — the
+  correlational number (visitors who matched a rule vs. visitors who
+  didn't, different populations, D7) stays as the honest fallback when no
+  holdout is running yet, with a nudge to turn one on.
+- A significant *underperformance* verdict now surfaces as a real warning
+  banner at the top of Home, not a sentence buried in a chart caption —
+  matches Home's own "what needs my attention today" purpose from the
+  2026-09-04 IA-collapse slice.
+- Analytics' own p-value displays swapped to `confidenceLabel` too, for
+  the same reason, everywhere it appears — not just on Home.
+
+**Verified live against real data, not synthetic assertions in isolation**:
+seeded a genuinely significant holdout split (50 holdout views/5 clicks =
+10%, 50 treatment views/20 clicks = 40%, both past `MIN_GROUP_SIZE`) on
+the real elevenlabs.io site, confirmed Home rendered "Verified
+personalization lift / +300% / 99.9%+ confidence — a real holdout test,
+not just correlation" — the exact number the math implies, not a
+placeholder. Also confirmed *why* the top page-view/CTA-click counters
+correctly read 0 in that same screenshot before treating it as done: the
+seed was 100% holdout+treatment traffic with no "pure generic, no rule
+matched" events at all, and those counters specifically track that third
+bucket — confirmed by reading `getOrgAnalytics`'s bucket-assignment logic
+directly, not assumed to be a bug and left uninvestigated. All seeded
+events, the holdback setting, and the session removed afterward.
+
+`pnpm typecheck && pnpm lint && pnpm test (362, 3 new for
+confidenceLabel) && pnpm build` all clean.
+
+**Not done, flagged not silently dropped**: true per-audience/per-
+experience lift (the plan's literal "+41% on your Enterprise segment"
+framing) — needs a real `audienceId` (or matched-rule) column on
+`SiteEvent`, populated at record time the same way `personalized`/
+`heldOut` already are. A real, scoped follow-up, not a rewrite — noted
+here so it doesn't quietly become "already done" because the language
+now sounds like it.

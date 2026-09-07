@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session";
 import { getCurrentOrgForUser } from "@/lib/organizations/current";
 import { getOrgAnalytics, type CausalLift } from "@/lib/analytics/service";
+import { confidenceLabel } from "@/lib/analytics/significance";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -48,14 +49,14 @@ function CausalVerdict({ causalLift }: { causalLift: CausalLift }) {
   if (significance.direction === "higher") {
     return (
       <p className="text-sm font-medium text-[var(--status-positive)]">
-        Personalization is significantly helping on this site (p = {significance.pValue.toFixed(4)}).
+        Personalization is significantly helping on this site — {confidenceLabel(significance.pValue)} confidence.
       </p>
     );
   }
   return (
     <p className="text-sm font-medium text-danger">
-      Personalization is significantly underperforming the default on this site (p = {significance.pValue.toFixed(4)}) —
-      review your active rules.
+      Personalization is significantly underperforming the default on this site — {confidenceLabel(significance.pValue)}{" "}
+      confidence — review your active rules.
     </p>
   );
 }

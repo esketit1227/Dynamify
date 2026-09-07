@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { getCurrentOrgForUser } from "@/lib/organizations/current";
 import { getOverviewStats } from "@/lib/overview/service";
 import { getOrgAnalytics } from "@/lib/analytics/service";
+import { confidenceLabel } from "@/lib/analytics/significance";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { HeroStatCard } from "@/components/dashboard/hero-stat-card";
 import { StatCard } from "@/components/dashboard/stat-card";
@@ -67,6 +68,32 @@ export default async function OverviewPage() {
         100
       : null;
 
+  // docs/launch-plan.md §5E — "+41% conversion, 97% confidence" is the
+  // number this product exists to produce, but it was previously buried as
+  // a caption sentence below a weaker, merely-correlational headline
+  // number (relativeImprovement above, which compares visitors who
+  // matched a rule against visitors who didn't — different populations,
+  // not a controlled comparison; see D7 in docs/decisions.md). The causal
+  // number — the *same* population, split by a real holdout coin flip —
+  // is what actually backs a claim like this, so it's what leads once it
+  // exists. Same formula CausalLiftCard already uses (src/app/(dashboard)/
+  // analytics/page.tsx) — not recomputed differently in two places by
+  // accident, just not extracted into a shared helper for one call site
+  // each.
+  const significance = analytics.causalLift?.significance ?? null;
+  const causalLiftPercent =
+    analytics.causalLift?.holdoutConversionRate !== null &&
+    analytics.causalLift?.holdoutConversionRate !== undefined &&
+    analytics.causalLift.holdoutConversionRate > 0 &&
+    analytics.causalLift?.treatmentConversionRate !== null &&
+    analytics.causalLift?.treatmentConversionRate !== undefined
+      ? ((analytics.causalLift.treatmentConversionRate - analytics.causalLift.holdoutConversionRate) /
+          analytics.causalLift.holdoutConversionRate) *
+        100
+      : null;
+  const hasVerifiedLift = significance?.significant && significance.direction === "higher" && causalLiftPercent !== null;
+  const isUnderperforming = significance?.significant && significance.direction === "lower";
+
   return (
     <>
       <PageHeader
@@ -91,16 +118,36 @@ export default async function OverviewPage() {
         />
       ) : (
         <>
+          {isUnderperforming ? (
+            <div className="mb-4 rounded-lg border border-danger/30 bg-danger/10 p-4">
+              <p className="text-sm font-medium text-danger">
+                Personalization is significantly underperforming the default ({confidenceLabel(significance!.pValue)}{" "}
+                confidence) — worth reviewing your active rules.
+              </p>
+              <Link href="/analytics" className="mt-1 inline-block text-xs font-medium text-danger underline underline-offset-2">
+                See the holdout comparison
+              </Link>
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <HeroStatCard
-              label="Personalization lift"
-              value={
-                relativeImprovement !== null
-                  ? `${relativeImprovement >= 0 ? "+" : ""}${relativeImprovement.toFixed(0)}%`
-                  : "Not enough data yet"
-              }
-              caption="Personalized vs. default conversion rate, across all sites"
-            />
+            {hasVerifiedLift ? (
+              <HeroStatCard
+                label="Verified personalization lift"
+                value={`${causalLiftPercent! >= 0 ? "+" : ""}${causalLiftPercent!.toFixed(0)}%`}
+                caption={`${confidenceLabel(significance!.pValue)} confidence — a real holdout test, not just correlation`}
+              />
+            ) : (
+              <HeroStatCard
+                label="Personalization lift"
+                value={
+                  relativeImprovement !== null
+                    ? `${relativeImprovement >= 0 ? "+" : ""}${relativeImprovement.toFixed(0)}%`
+                    : "Not enough data yet"
+                }
+                caption="Personalized vs. default conversion rate — turn on a holdout test on a site for a verified number"
+              />
+            )}
             <StatCard
               label="Page views"
               value={analytics.totals.pageViews.toLocaleString()}
@@ -136,9 +183,9 @@ export default async function OverviewPage() {
               <p className="mt-3 text-xs text-muted">
                 Conversion rate — {formatRate(analytics.genericConversionRate)} default vs.{" "}
                 {formatRate(analytics.personalizedConversionRate)} personalized.{" "}
-                {analytics.causalLift?.significance?.significant
-                  ? analytics.causalLift.significance.direction === "higher"
-                    ? "Backed by a statistically significant holdout test."
+                {significance?.significant
+                  ? significance.direction === "higher"
+                    ? `Backed by a real holdout test, ${confidenceLabel(significance.pValue)} confidence.`
                     : "A holdout test shows personalization currently underperforming the default — worth a review."
                   : "Run a holdout test on a site for a causal (not just correlated) comparison."}
               </p>

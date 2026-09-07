@@ -71,3 +71,13 @@ export function twoProportionZTest(control: ProportionSample, treatment: Proport
     direction: !significant ? "no_difference" : p2 > p1 ? "higher" : "lower",
   };
 }
+
+// docs/launch-plan.md §5E — "97.3% confidence" is a number a CMO can act
+// on; "p = 0.0086" isn't, even though they say the same thing. Capped just
+// under 100%: a p-value can round to 0 at typical display precision, but
+// statistical significance is never certainty, so this never claims it is.
+export function confidenceLabel(pValue: number): string {
+  const confidence = (1 - pValue) * 100;
+  if (confidence >= 99.9) return "99.9%+";
+  return `${confidence.toFixed(1)}%`;
+}
