@@ -29,17 +29,32 @@ const elementTypeValues = [
   "OTHER",
 ] as const;
 
-const understandingSchema = z.object({
-  companySummary: z.string().max(1000),
-  productSummary: z.string().max(1000),
-  targetCustomers: z.string().max(1000),
+// A hard `.max(n)` throws the whole response away over one field running a
+// little long — the same "don't discard a good result over a minor
+// mismatch" bug already found and fixed for positioningAngles
+// (src/lib/sites/designPage.ts, docs/roadmap.md 2026-09-07), independently
+// reproduced here: a real understandSite() call against elevenlabs.io
+// failed 100% on `brandTone.formality` running over its 50-char cap by a
+// few characters, with nothing else wrong. Truncate instead of reject —
+// still bounds the field, never throws a real result away over it.
+function truncated(maxLen: number) {
+  return z.string().transform((value) => (value.length > maxLen ? `${value.slice(0, maxLen - 3)}...` : value));
+}
+
+// Exported for direct schema unit tests (tests/unit/sites/understand.test.ts)
+// — the truncate-not-reject behavior is the load-bearing part of this fix,
+// worth testing without a real Anthropic call.
+export const understandingSchema = z.object({
+  companySummary: truncated(1000),
+  productSummary: truncated(1000),
+  targetCustomers: truncated(1000),
   brandTone: z.object({
-    tone: z.array(z.string().max(50)).max(10),
-    vocabulary: z.array(z.string().max(50)).max(10),
-    formality: z.string().max(50),
+    tone: z.array(truncated(50)).max(10),
+    vocabulary: z.array(truncated(50)).max(10),
+    formality: truncated(50),
   }),
-  valueProps: z.array(z.string().max(300)).max(10),
-  primaryCta: z.string().max(100).nullable(),
+  valueProps: z.array(truncated(300)).max(10),
+  primaryCta: truncated(100).nullable(),
   pages: z
     .array(
       z.object({
