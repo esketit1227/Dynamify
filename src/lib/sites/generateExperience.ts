@@ -450,6 +450,35 @@ export async function getGeneratedExperience(
   return toExperienceDTO(await requireExperience(organizationId, experienceId));
 }
 
+// Org-wide "what's waiting for me" feed — every GeneratedExperience, across
+// every site and every source (traffic-triggered recommendation or
+// crawl-only converting page), that a human hasn't fully acted on yet. Feeds
+// Home's review feed (src/components/dashboard/pending-experiences-feed.tsx)
+// as well as /recommendations, both rendering through the same
+// ExperienceReview component — one shape, not two representations of the
+// same row to keep in sync. Same org-wide-by-organizationId pattern already
+// established by listAllRecommendations/listConvertingPageCandidates.
+export async function listPendingExperiences(
+  organizationId: string,
+  options: { take?: number } = {},
+): Promise<GeneratedExperienceDTO[]> {
+  const experiences = await prisma.generatedExperience.findMany({
+    where: { organizationId, status: { in: ["PENDING", "PARTIALLY_APPROVED"] } },
+    include: EXPERIENCE_INCLUDE,
+    orderBy: { createdAt: "desc" },
+    take: options.take,
+  });
+  return experiences.map(toExperienceDTO);
+}
+
+// Paired, uncapped count — lets a capped feed (e.g. Home's top 3) say
+// "3 shown, 12 total" without a second full-row fetch.
+export async function countPendingExperiences(organizationId: string): Promise<number> {
+  return prisma.generatedExperience.count({
+    where: { organizationId, status: { in: ["PENDING", "PARTIALLY_APPROVED"] } },
+  });
+}
+
 // Only ever advances a PENDING rule to APPROVED — a rule someone already
 // individually disabled stays disabled, so approving the rest of the
 // batch never overrides a decision a human already made on one piece.

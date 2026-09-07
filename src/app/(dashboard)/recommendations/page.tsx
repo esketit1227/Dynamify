@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session";
 import { getCurrentOrgForUser } from "@/lib/organizations/current";
 import { listAllRecommendations } from "@/lib/recommendations/service";
+import { listConvertingPageCandidates } from "@/lib/recommendations/convertingPages";
+import { listPageDesignCandidates } from "@/lib/sites/designPage";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RecommendationsPage } from "@/components/recommendations/recommendations-page";
 
@@ -11,7 +13,11 @@ export default async function Recommendations() {
   const organization = await getCurrentOrgForUser(user.id);
   if (!organization) redirect("/login");
 
-  const recommendations = await listAllRecommendations(organization.id);
+  const [recommendations, convertingPageCandidates, pageDesignCandidates] = await Promise.all([
+    listAllRecommendations(organization.id),
+    listConvertingPageCandidates(organization.id),
+    listPageDesignCandidates(organization.id),
+  ]);
 
   return (
     <>
@@ -19,7 +25,12 @@ export default async function Recommendations() {
         title="Recommendations"
         description="Real visitor segments worth targeting, across every connected site."
       />
-      <RecommendationsPage organizationId={organization.id} initialRecommendations={recommendations} />
+      <RecommendationsPage
+        organizationId={organization.id}
+        initialRecommendations={recommendations}
+        initialConvertingPageCandidates={convertingPageCandidates}
+        initialPageDesignCandidates={pageDesignCandidates}
+      />
     </>
   );
 }

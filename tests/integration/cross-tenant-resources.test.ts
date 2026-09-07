@@ -6,6 +6,9 @@ import { generateImageVariant } from "@/lib/sites/generateImage";
 import {
   ContentElementNotFoundError as ImageElementNotFoundError,
   AudienceNotFoundError as ImageAudienceNotFoundError,
+  createElementPersonalization,
+  updateElementPersonalizationRuleContent,
+  ElementPersonalizationRuleNotFoundError,
 } from "@/lib/sites/personalization";
 import { resetDb } from "../setup/reset";
 import { createOrgWithUser } from "../setup/factories";
@@ -101,5 +104,34 @@ describe("cross-tenant isolation — audiences/sites/personalization", () => {
       where: { contentElementId: { in: [elementA.id, elementB.id] } },
     });
     expect(rules).toEqual([]);
+  });
+
+  // The "rewrite this piece" action (src/lib/sites/personalization.ts) —
+  // full behavioral coverage lives in
+  // tests/integration/personalization-content-edit.test.ts; this is the
+  // one-line entry for this file's own "every resource type" checklist.
+  it("org A cannot edit org B's personalization rule content", async () => {
+    const { organization: orgA } = await createOrgWithUser();
+    const { organization: orgB } = await createOrgWithUser();
+
+    const siteB = await prisma.site.create({ data: { organizationId: orgB.id, url: "https://b.example.com", status: "READY" } });
+    const pageB = await prisma.crawledPage.create({ data: { siteId: siteB.id, organizationId: orgB.id, url: "https://b.example.com" } });
+    const elementB = await prisma.contentElement.create({
+      data: { crawledPageId: pageB.id, organizationId: orgB.id, section: "HERO", elementType: "HEADLINE", selector: "h1", currentContent: "Org B headline", order: 0 },
+    });
+    const audienceB = await prisma.audience.create({ data: { organizationId: orgB.id, name: "Org B audience" } });
+    const ruleB = await createElementPersonalization(orgB.id, elementB.id, {
+      audienceId: audienceB.id,
+      method: "AI",
+      content: "Org B's original content",
+      priority: 0,
+    });
+
+    await expect(
+      updateElementPersonalizationRuleContent(orgA.id, ruleB.id, "Hijacked content"),
+    ).rejects.toThrow(ElementPersonalizationRuleNotFoundError);
+
+    const variant = await prisma.elementVariant.findUnique({ where: { id: ruleB.elementVariantId } });
+    expect(variant?.content).toBe("Org B's original content");
   });
 });

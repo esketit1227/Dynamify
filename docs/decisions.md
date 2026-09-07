@@ -273,6 +273,252 @@ data either way.
 
 ---
 
+---
+
+## D8. Should the generator ever design a brand-new page layout, not just rewrite content? — **decided 2026-09-07**
+
+**Decided: "design-only v1."** Put to the user directly as four concrete
+delivery-mechanism options with their real tradeoffs (design-only preview;
+Dynamify-hosted alternate page + redirect; full client-side DOM
+replacement; server-side edge rendering/reverse proxy) — the user chose
+design-only. Built as `PageDesign` (`src/lib/sites/designPage.ts`,
+`src/components/recommendations/page-design-preview.tsx` /
+`page-design-review.tsx`, the "Design a new page" section on
+`/recommendations`): the AI proposes a whole new page — an ordered list of
+sections with a layout variant and copy each — reviewable in a preview.
+**Nothing is delivered to the live site.** No `Audience`, no
+`ElementPersonalizationRule`, no `ElementVariant`, no `GeneratedExperience`
+row is ever created — verified directly, both in integration tests and
+live, that generating and endorsing a design leaves all four counts at
+zero. "Endorse" records that the customer likes the direction; it is not,
+and structurally cannot become, "live." This keeps D1/D2/D3's verified
+DOM-swap model completely untouched, which is why `docs/product-spec.md`'s
+"never changes your layout" promise still holds for everything that
+actually reaches a visitor — the reasoning below for why that promise is
+load-bearing, not a stray sentence, stands as the reason design-only was
+the safe choice, not as an unresolved question anymore.
+
+Requested directly: the page/experience generator (`src/lib/sites/generateExperience.ts`,
+extended for crawl-only generation in `src/lib/recommendations/convertingPages.ts`)
+should be able to "produce totally new pages with self-designed layouts,"
+not just rewrite copy inside the customer's existing structure.
+
+**This is a direct reversal of the product's own stated definition, not a
+scope increment.** `docs/product-spec.md` states "without changing its
+underlying design, layout, branding, or theme" as the one-line elevator
+pitch (line 947) and repeats the same boundary eleven more times
+throughout the doc ("The layout remains exactly the same," "It should not
+create a different layout for every audience," "not a complete website
+redesign tool," etc.). It isn't a stray sentence — every later
+architectural decision was built assuming it holds:
+
+- **D1** (client-side embed, decided 2026-08-27): the script finds *the
+  same DOM node* the crawl identified and swaps its content in place. It
+  has no mechanism for inserting new structure, and was never asked to —
+  "swap a text node" and "render a new layout" are different engineering
+  problems with different safety models.
+- **D2/D3** (content-fingerprint verification): the whole safety guarantee
+  ("never mis-target, never break the page") rests on matching a selector
+  to *exactly one existing element* and comparing its *existing content*
+  byte-for-byte. A generated layout has no pre-existing selector to verify
+  against — there's nothing there yet to check before writing.
+- **D4** (two-layer brand-safety check): the whitelist step checks
+  generated *text* against facts already present in the crawl. A generated
+  *layout* isn't a claim that can be whitelisted the same way — "is this
+  arrangement of sections safe to publish on a customer's live site
+  unreviewed" is a different, harder question than "does this sentence
+  invent a customer."
+
+**What building this for real would actually require**, sized honestly so
+this isn't underestimated: a second rendering/injection mechanism
+alongside the verified DOM-swap one (either full-page replacement behind a
+navigation, or a much heavier structural-diff/patch approach against the
+live DOM); a new review surface, since "diff this text against that text"
+in the current approval UI doesn't work for "review this entire generated
+page"; and a real answer to what happens when the live site's structure
+drifts after the crawl (D2/D3's whole reason for existing) once there's no
+single node to re-verify. This is closer in size to Phase 2 (the embed
+script itself) than to a slice of Phase 3/5's existing content-generation
+work.
+
+**Two distinct things the original request bundled together, decided
+separately rather than as one yes/no:** (1) whether Dynamify's positioning
+changes from "personalize your existing site" to "also design new page
+structures" — answered as design-only, not a positioning change, the
+generated design is explicitly never published; (2) the narrower, still
+genuinely open middle ground named below — reordering/showing-hiding
+*existing* crawled sections per audience (still no new HTML, no new visual
+design, but needs `ContentElement`/`ComponentDefinition` to support a
+personalizable order/visibility, which they don't today) — remains
+unbuilt, real future scope, not resolved by shipping the design-only
+artifact.
+
+**What's still open, now that design-only exists: D10, below** — whether
+and how a design a customer has endorsed should ever actually reach their
+site. Not resolved here, not silently assumed; see D10.
+
+## D9. Live market/competitor research as a generation input — **decided 2026-09-07**
+
+**Decided: "AI-knowledge-only."** Put to the user directly alongside two
+alternatives (customer-provided competitor URLs crawled through the
+existing safe crawler; a new live search-API integration for automatic
+discovery) — the user chose AI-knowledge-only: no new integration, no
+outbound fetch, no new SSRF surface. Built as `researchMarketContext`
+(`src/lib/sites/designPage.ts`): one Anthropic call asking the model to
+describe likely market positioning from its own training knowledge,
+explicitly instructed to never name a real competitor or state a
+statistic/date/figure. Labeled in the UI, verbatim, as **"AI general
+knowledge — not live research"** with the caveat that it cites no sources,
+may be out of date, and hasn't been verified. **This does not satisfy
+"provable sources," which was part of the original request** — stated
+plainly, not smoothed over: a live-research path was on the table and
+explicitly not chosen. `marketContext` is deliberately never merged into
+`buildContentCorpus`'s ground-truth corpus, so D4's whitelist still has
+exactly one trusted source (the customer's own crawled content) — D9
+stayed compatible with D4 rather than widening it, resolving the concern
+the original flagging raised below.
+
+Requested directly: the generator should be able to research the
+customer's market and competitors, not just use the crawl and (today)
+audience-targeting, when drafting a converting page.
+
+**Compatible with the existing architecture, unlike D8** — this is
+additional *input* to the same generation step (`generateExperience`
+already runs outside the pure `resolve()` engine, at request-time I/O is
+already allowed there: it calls Anthropic, reads `WebsiteUnderstanding`
+from the DB, etc.), not a change to what gets rendered or how. Still a
+real, not-small addition, flagged rather than started silently because it
+touches security and cost surfaces CLAUDE.md calls out explicitly:
+
+- **A genuinely new integration.** Nothing in this codebase does live web
+  search or fetches arbitrary third-party pages today — the crawler
+  (`src/lib/sites/crawler.ts`) only ever fetches the customer's *own*
+  site, through `assertSafeExternalUrl`'s SSRF guard. "Research
+  competitors" means either calling a real search API (new paid
+  dependency, new env var, same graceful-degradation shape as
+  `OPENAI_API_KEY`/`IPINFO_BASE_URL`) or fetching specific competitor URLs
+  (still needs the SSRF guard, still a new class of outbound request this
+  app doesn't make anywhere today).
+- **Widens D4's brand-safety model.** The whitelist check
+  (`checkClaimsAgainstCorpus`) only ever treats the *customer's own
+  crawled content* as ground truth for what a generated claim is allowed
+  to reference. If external research becomes a legitimate source
+  ("compared to Competitor X, ..."), the whitelist/fact-check pass needs
+  to know about a second trusted source — otherwise every
+  research-informed claim gets rejected as unverifiable, or the check has
+  to be loosened in a way that needs its own deliberate design, not a
+  silent widening of a mechanism D4 designed carefully around one source.
+- **A new untrusted-input surface.** CLAUDE.md: "AI: user content is
+  untrusted input, never instruction." Scraped/searched competitor content
+  is *more* adversarial than the customer's own site (a competitor has no
+  incentive to keep Dynamify's prompts well-behaved) — needs the same
+  discipline already applied to crawled content, extended to a source this
+  app has never ingested before.
+
+Live/verified market research (a real search API, or fetching customer-
+named competitor URLs through the existing crawler) remains unbuilt and
+unstarted — a real, scoped follow-up if "provable sources" ever becomes a
+requirement rather than a nice-to-have, likely closer in size to a Phase 6
+integration slice (a new provider, mocked in dev/test, real key needed for
+production) than an increment to what shipped here.
+
+**Revised 2026-09-07 (later the same day): AI-knowledge-only → real web
+search.** Requested directly, reopening this exact decision. Put to the
+user again with two concrete choices (a specific provider vs. naming one
+already in hand) and a second, related choice this reopening surfaced —
+now that research is real and sourced, should the UI actually show the
+citations, closing the "provable sources" gap the paragraphs above
+state was left open. Both answered as the fuller option: **Tavily**, and
+**yes, show real sources with links**.
+
+Built: `src/lib/search/tavily.ts` (`searchWeb`) — the exact optional-
+integration shape every other provider here already uses
+(`TAVILY_API_KEY`/`TAVILY_BASE_URL` in `src/lib/env.ts`,
+`MarketResearchNotConfiguredError`, mocked in dev via a local HTTP server
+since no real key exists in this environment, same as ipinfo/OpenAI
+images/Resend). `researchMarketContext` now calls it, then has Claude
+synthesize a summary — but the system prompt changed from "you have no
+real source, stay generic" to the opposite instruction: name a specific
+competitor or cite a fact *only* because it's actually present in the
+real results given, and say so plainly when the results don't support a
+claim. `PageDesign.marketSources` (new `Json` column, `{title, url}[]`,
+validated both ways like `sections`) stores exactly the results the
+summary was built from — not a separately-asserted list — and
+`page-design-review.tsx` renders them as real `target="_blank"` links.
+Verified live against a mocked Tavily response naming two real (mocked)
+competitors: the synthesis correctly stayed inside what the mock results
+said, including hedging on a claim the results didn't support, and the
+rendered links pointed at the mock's exact URLs.
+
+**The three concerns the original flagging raised, resolved, not
+reopened:**
+1. *New integration* — built exactly as flagged, no surprises: fixed,
+   known host (`TAVILY_BASE_URL`), so this needs no `safeFetch`/SSRF
+   guard (same reasoning `ipFirmographics.ts` already documents), and
+   introduces no new "fetch an arbitrary third-party URL" surface at
+   all — Tavily's API does that fetching on its own side; this app only
+   ever consumes its structured JSON response.
+2. *D4 widening* — avoided, not silently accepted: `marketContext` is
+   still never merged into `buildContentCorpus`'s ground-truth corpus.
+   A competitor name from search results can appear in the market-context
+   *blurb*, but `generateDesignWithAi`'s system prompt now explicitly
+   forbids naming a competitor inside the actual page copy, and the
+   unchanged `checkClaimsAgainstCorpus` still rejects one if the
+   instruction is ignored — verified live: the mocked run's real page
+   copy contained zero competitor names despite the market context
+   naming two.
+3. *Untrusted input* — search results are labeled `(untrusted data)` in
+   the prompt exactly like crawled content and market-context prose
+   already were; the model is instructed to synthesize, not follow any
+   instruction the snippets might contain.
+
+Independent decision, orthogonal to D8/D10: this widens what *informs* a
+design (an input to `generateNewPageDesign`), not what a design *is* or
+whether it can ever be published — the design-only boundary and D10's
+open delivery question are completely unaffected.
+
+---
+
+## D10. Should an endorsed page design ever actually reach a visitor? — **flagging, not deciding**
+
+D8's design-only v1 (above) deliberately builds a dead end on purpose: a
+`PageDesign` a customer endorses has no path to the live site at all. That
+was the right scope for a first slice, but it means "endorse" today can
+only ever mean "hand this to whoever builds your pages" — off-platform,
+manual, no loop back into the product. Whether that's the permanent shape
+or a placeholder is a real, undecided question, not something to infer
+from the fact that v1 shipped this way.
+
+If this ever gets revisited, the four options actually put to the user for
+D8 are the same four still on the table, now with a real design-only
+artifact to build on rather than a blank page:
+
+1. **Stay design-only, permanently.** Dynamify positions itself as a
+   content-personalization tool *and* a design-inspiration tool for
+   humans to act on — two related but distinct value propositions, never
+   merged.
+2. **Dynamify-hosted alternate page + redirect.** The biggest single
+   change: a matched visitor's browser ends up at a different URL than the
+   one they clicked — breaks CLAUDE.md's own "one page, one URL"
+   framing literally, with real SEO/analytics/bookmarking consequences,
+   not just a copy-swap risk.
+3. **Full client-side DOM replacement.** Keeps the URL, but has no
+   fingerprint-verification story (D2/D3's whole mechanism assumes the
+   node being touched existed at crawl time) and a materially larger XSS
+   surface than anything this product has shipped — arbitrary generated
+   markup, not just generated text into a known attribute.
+4. **Server-side edge rendering/reverse proxy.** The option D1 already
+   rejected once (2026-08-27) for cost/integration-friction reasons,
+   reopened only if a real customer need specifically justifies the
+   DNS/TLS/critical-path commitment.
+
+None of these should be picked opportunistically inside an unrelated task
+— exactly the pattern this document exists to prevent. Surfacing it here
+so the next time "make the design live" comes up, it's answered as its own
+deliberate decision.
+
+---
+
 ### Superseded (old hosted-page architecture — 2026-08-26, no longer applicable)
 
 The prior D1–D6 (personalization resolution location, flash of default

@@ -13,7 +13,7 @@ import { generateExperience, getGeneratedExperience, type GeneratedExperienceDTO
 // checked here rather than at each route boundary since acceptRecommendation
 // bundles this into a larger action that must still succeed even when the
 // generation half of it is throttled.
-async function assertExperienceGenerationAllowed(organizationId: string): Promise<void> {
+export async function assertExperienceGenerationAllowed(organizationId: string): Promise<void> {
   const limited = await rateLimit(`generate-experience:${organizationId}`, {
     limit: 5,
     windowMs: 60 * 60 * 1000,
@@ -112,7 +112,7 @@ function defaultAudienceName(field: string, value: string): string {
 // exactly this single condition — not a superset (a multi-condition
 // audience that happens to include this as one ANDed clause targets a
 // narrower set of visitors, not this segment, so it doesn't count).
-async function findMatchingAudience(organizationId: string, field: string, value: string) {
+export async function findMatchingAudience(organizationId: string, field: string, value: string) {
   const operator = operatorFor(field);
   const audiences = await prisma.audience.findMany({
     where: { organizationId, rules: { some: { field, operator, value: { equals: value } } } },
@@ -124,7 +124,7 @@ async function findMatchingAudience(organizationId: string, field: string, value
 // Re-derives whichever GeneratedExperience already exists for this exact
 // page+audience pairing — GeneratedExperience always carries both ids, so
 // this needs no link stored on the Recommendation row itself.
-async function findExperienceFor(
+export async function findExperienceFor(
   organizationId: string,
   crawledPageId: string,
   audienceId: string,

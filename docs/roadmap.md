@@ -2408,3 +2408,84 @@ approving or discarding it — same limitation the manual flow already had,
 not a regression; per-site audiences (the underlying `Audience` model is
 still org-scoped, not site-scoped, an existing constraint this feature
 didn't change or attempt to).
+
+### 2026-09-07 — "Design a new page" market context: AI-knowledge-only → real web search (D9 revised)
+
+Requested directly, reopening D9 (`docs/decisions.md`) the same day it was
+decided: replace the AI-knowledge-only market-context blurb with a real
+search integration. Asked which provider (no search API key exists in
+this environment, same as every other optional integration) and whether
+to surface real citations now that research is actually sourced — chose
+**Tavily**, and **yes, show real sources**, closing the "provable sources"
+gap the original AI-knowledge-only slice explicitly left open and stated
+plainly rather than glossed over.
+
+**Built:** `src/lib/search/tavily.ts` (`searchWeb`) — the identical
+optional-integration shape every provider here already uses:
+`TAVILY_API_KEY`/`TAVILY_BASE_URL` (`src/lib/env.ts`),
+`MarketResearchNotConfiguredError` thrown before any network call if
+unset, zod-validated response, plain `fetch` rather than the SSRF-guarded
+`safeFetch` (the target host is the fixed `TAVILY_BASE_URL` literal, never
+attacker-controlled — same reasoning `ipFirmographics.ts` already
+documents for the identical choice, and also why this introduces no new
+"fetch an arbitrary third-party URL" surface at all: Tavily fetches
+results on its own side, this app only ever consumes its structured
+JSON). `researchMarketContext` (`src/lib/sites/designPage.ts`) now calls
+it, then has Claude synthesize a summary from the *real* results —
+system prompt changed from "you have no real source, stay generic" to
+its near-opposite: name a competitor or cite a fact only because the
+results actually say so, and say plainly when they don't support a claim.
+New `PageDesign.marketSources` column (`{title, url}[]`, validated both
+ways like `sections` already is) stores exactly the results the summary
+was built from, rendered in `page-design-review.tsx` as real
+`target="_blank" rel="noopener noreferrer"` links — not a separately
+asserted list, the actual inputs.
+
+**A real, deliberate behavior change alongside this**: market research
+and page-copy generation used to share one try/catch, so any failure in
+generating the page's actual copy reset `marketContext` back to `""` —
+correct when market context was pure AI speculation tightly coupled to
+"the AI path," wrong now that it's independently real and sourced. Split
+into two independent try/catches: a real citation that was actually found
+now survives even if the page-copy step itself falls back to heuristic,
+and vice versa.
+
+**Security review, same three concerns D9 originally flagged, checked
+against what actually got built**: (1) new integration — fixed known
+host, no new SSRF surface, confirmed above; (2) D4 widening — avoided,
+not silently accepted: `marketContext`/`marketSources` are still never
+merged into `buildContentCorpus`'s corpus, and `generateDesignWithAi`'s
+system prompt now explicitly forbids naming a competitor inside the
+actual page copy (only this company's own real content may be stated
+directly there) — the unchanged `checkClaimsAgainstCorpus` remains the
+backstop if that instruction is ever ignored; (3) untrusted input — search
+results are labeled `(untrusted data)` in the prompt exactly like crawled
+content already is.
+
+Verified live against a local mock Tavily server (no real key exists in
+this environment) returning two realistic, fabricated-for-the-test
+competitor results: the synthesized summary correctly named both only
+because they were in the mock results, correctly hedged on a claim
+("integration or pricing compared to Amplitude or Mixpanel") the mock
+results didn't support, the two real sources rendered as correct, real,
+clickable links pointing at the mock's exact URLs, the actual generated
+page copy contained zero competitor names (the new prompt instruction
+held), and a direct database check confirmed the D8 boundary is
+unaffected by this change — zero `Audience`/rule/variant/experience rows
+after generating. `pnpm typecheck && pnpm lint && pnpm test (442, 28 new:
+schema/prompt/query-builder unit tests in
+tests/unit/sites/designPage.test.ts, a not-configured unit test in the new
+tests/unit/search/tavily.test.ts, and an integration test confirming
+generation still succeeds gracefully with no `TAVILY_API_KEY` configured)
+&& pnpm build` all clean. All mock-server/dev-server processes and seeded
+verification data removed afterward.
+
+**Not done, stated plainly**: no query-construction beyond a plain
+`"${companySummary} competitors and alternatives"` string — extracting an
+actual company/product name for a sharper search would be a real,
+separate improvement; no independent fact-check pass on the market-context
+summary itself (unlike page copy, which gets D4's full two-layer check) —
+the real, clickable sources next to the summary are the verification
+mechanism here, not a second LLM call; D8/D10 (design-only, no live
+delivery) are completely unaffected — this only changes what *informs* a
+design, not what a design *is* or whether it can ever reach a visitor.

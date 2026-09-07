@@ -202,6 +202,47 @@ async function setStatus(
   return toDTO(rule);
 }
 
+// The "rewrite this piece" action — nothing in the product has offered
+// this past initial creation until now; recommendation/generated-experience
+// content has only ever been shown read-only. Never creates a new
+// ElementVariant/rule (unlike createElementPersonalization) — it replaces
+// the existing variant's content in place.
+//
+// Always stamps method: "MANUAL", regardless of what it was before
+// (AI/HEURISTIC/MANUAL). Once a human has edited the actual wording,
+// reporting it as still AI-generated or "selected from your own site"
+// would misrepresent what's about to go live — this codebase never
+// blurs that distinction elsewhere (the Rule-based/AI-generated badge,
+// METHOD_LABEL), so an edit shouldn't quietly keep a stale label either.
+//
+// Deliberately does not touch `status`. Editing and approving are separate
+// explicit actions — "nothing goes live unapproved" isn't bypassed just
+// because the content changed. For a rule that's already APPROVED (live),
+// saving new content takes effect immediately with no re-approval gate:
+// that save *is* the human decision this product requires, not something
+// that should silently revert a live rule to PENDING until re-approved.
+export async function updateElementPersonalizationRuleContent(
+  organizationId: string,
+  ruleId: string,
+  content: string,
+): Promise<ElementPersonalizationRuleDTO> {
+  const existing = await prisma.elementPersonalizationRule.findFirst({
+    where: { id: ruleId, organizationId },
+  });
+  if (!existing) throw new ElementPersonalizationRuleNotFoundError();
+
+  await prisma.elementVariant.update({
+    where: { id: existing.elementVariantId },
+    data: { content, method: "MANUAL" },
+  });
+
+  const rule = await prisma.elementPersonalizationRule.findUniqueOrThrow({
+    where: { id: ruleId },
+    include: { audience: { select: { name: true } }, elementVariant: true },
+  });
+  return toDTO(rule);
+}
+
 // "Nothing goes live unapproved" (docs/roadmap.md Phase 3) — every rule is
 // created PENDING; resolve() only ever sees APPROVED ones
 // (getLiveViewDefinition is the one choke point that filters on this).

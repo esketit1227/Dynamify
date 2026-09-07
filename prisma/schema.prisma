@@ -598,6 +598,7 @@ model CrawledPage {
   recommendations      Recommendation[]
   impressions          Impression[]
   generatedExperiences GeneratedExperience[]
+  pageDesigns          PageDesign[]
 
   @@unique([siteId, url])
   @@index([organizationId])
@@ -747,6 +748,68 @@ model GeneratedExperience {
   @@index([organizationId])
   @@index([crawledPageId])
   @@index([audienceId])
+}
+
+// docs/decisions.md D8 (resolved 2026-09-07 as "design-only v1"): a whole
+// NEW proposed page — the one place in this product where AI output is
+// structural rather than a content swap. It is safe to exist precisely
+// because it has no delivery mechanism: no Audience, no
+// ElementPersonalizationRule, no ElementVariant, nothing resolve() or
+// dynamify-embed.js can ever see. The customer reviews it and endorses a
+// direction; implementing it is their own job, off-platform. D1/D2/D3's
+// verified DOM-swap model is untouched — this deliberately does not
+// extend it, which is why the "never changes your layout" promise in
+// docs/product-spec.md still holds for everything that actually ships to
+// a visitor.
+model PageDesign {
+  id             String           @id @default(cuid())
+  organizationId String
+  crawledPageId  String
+  status         PageDesignStatus @default(PENDING)
+  // Reuses VariantMethod (MANUAL is never written here) rather than a
+  // third near-identical enum.
+  method         VariantMethod    @default(HEURISTIC)
+  // docs/decisions.md D9 — revised 2026-09-07 from "AI-knowledge-only" to
+  // real web search (src/lib/search/tavily.ts): an AI-synthesized summary
+  // grounded in real search results, never speculation from training
+  // knowledge alone. Empty string when TAVILY_API_KEY isn't configured or
+  // the search/synthesis step failed — independent of `sections`/`method`
+  // below, since a real, successfully-found source is worth keeping even
+  // if the page-copy generation itself falls back to heuristic (see
+  // generateNewPageDesign's comment on why these are no longer coupled).
+  // Deliberately NEVER merged into buildContentCorpus's ground-truth
+  // corpus: it is prompt input and a UI blurb only, so D4's whitelist
+  // still has exactly one trusted source (the customer's own content).
+  marketContext  String           @db.Text
+  // The real search results marketContext was actually synthesized from —
+  // {title, url}[], validated by marketSourcesSchema on every write AND
+  // read. This is what makes the summary provable rather than an
+  // unverifiable AI claim: shown as real, clickable citations
+  // (page-design-review.tsx), not just asserted. Empty array whenever
+  // marketContext is "".
+  marketSources  Json
+  // Ordered section list, positional (index == render order). Validated
+  // by pageDesignSectionsSchema (src/lib/sites/designPage.ts) on every
+  // write AND every read — a Json column carries no shape guarantee of
+  // its own.
+  sections       Json
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  crawledPage CrawledPage @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([crawledPageId])
+}
+
+// Deliberately NOT reusing the word APPROVED, which everywhere else in
+// this schema (PersonalizationRuleStatus, GeneratedExperienceStatus) means
+// "this is being served to real visitors." ENDORSED means "the customer
+// likes this direction"; there is no mechanism by which it could ever be
+// live. Rejecting hard-deletes the row (mirrors rejectAllGeneratedExperience).
+enum PageDesignStatus {
+  PENDING
+  ENDORSED
 }
 
 enum UnderstandingMethod {

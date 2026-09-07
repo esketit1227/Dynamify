@@ -105,7 +105,11 @@ export async function updateAudience(
 // from a prior seed or because the org built its own — never overwrites
 // or duplicates. Called once, from runCrawlAndUnderstand's success path
 // (src/lib/sites/service.ts), on a site's first successful connection.
-const DEFAULT_AUDIENCES = [
+// Exported so other callers can target one of these exact presets without
+// re-declaring its field/operator/value (e.g. convertingPages.ts's
+// "Mobile visitors" targeting) rather than risking drift between two
+// hand-typed copies of the same condition.
+export const DEFAULT_AUDIENCES = [
   {
     name: "New visitors",
     description: "Visiting for the first time, as far as we can tell.",

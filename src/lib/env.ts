@@ -30,6 +30,16 @@ const envSchema = z.object({
   // domain, meant to be overridden once one exists. Keeps "set one API key"
   // literally true: no domain/DNS setup required to get real email flowing.
   EMAIL_FROM_ADDRESS: z.string().min(1).default("Dynamify <onboarding@resend.dev>"),
+  // Real web search for the "Design a new page" market-context feature
+  // (docs/decisions.md D9, revised 2026-09-07 from AI-knowledge-only to
+  // real search — see src/lib/search/tavily.ts). Optional, same
+  // graceful-degradation shape as every other integration here: unset
+  // means no market research is attempted at all, not a fake result.
+  TAVILY_API_KEY: z.string().min(1).optional(),
+  // Overridable for the same reason as IPINFO_BASE_URL/OPENAI_IMAGE_BASE_URL/
+  // RESEND_BASE_URL — live verification against a local mock, no real key
+  // in this environment.
+  TAVILY_BASE_URL: z.string().min(1).default("https://api.tavily.com"),
   // Ecommerce foundation (docs/ecommerce.md): a 32-byte key, hex-encoded
   // (`openssl rand -hex 32`), for AES-256-GCM encryption of stored platform
   // credentials (src/lib/security/encryption.ts). Optional because nothing

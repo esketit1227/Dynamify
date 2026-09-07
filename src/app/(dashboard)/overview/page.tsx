@@ -6,10 +6,12 @@ import { getCurrentOrgForUser } from "@/lib/organizations/current";
 import { getOverviewStats } from "@/lib/overview/service";
 import { getOrgAnalytics } from "@/lib/analytics/service";
 import { confidenceLabel } from "@/lib/analytics/significance";
+import { listPendingExperiences, countPendingExperiences } from "@/lib/sites/generateExperience";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { HeroStatCard } from "@/components/dashboard/hero-stat-card";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { FeaturedSiteCard } from "@/components/dashboard/featured-site-card";
+import { PendingExperiencesFeed } from "@/components/dashboard/pending-experiences-feed";
 import { BarChart } from "@/components/charts/bar-chart";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -55,7 +57,11 @@ export default async function OverviewPage() {
     );
   }
 
-  const analytics = await getOrgAnalytics(organization.id);
+  const [analytics, pendingExperiences, pendingExperiencesTotal] = await Promise.all([
+    getOrgAnalytics(organization.id),
+    listPendingExperiences(organization.id, { take: 3 }),
+    countPendingExperiences(organization.id),
+  ]);
 
   // Relative improvement only means something against a non-zero default
   // rate — some views but zero default clicks makes the ratio undefined,
@@ -104,6 +110,12 @@ export default async function OverviewPage() {
             <Button variant="secondary">Connect a website</Button>
           </Link>
         }
+      />
+
+      <PendingExperiencesFeed
+        organizationId={organization.id}
+        initialExperiences={pendingExperiences}
+        totalCount={pendingExperiencesTotal}
       />
 
       {!analytics.hasAnyData ? (
