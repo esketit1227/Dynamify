@@ -7,14 +7,7 @@ import { FormError } from "@/components/ui/form-error";
 import { EmptyState } from "@/components/ui/empty-state";
 import type { WebhookDTO } from "@/lib/integrations/service";
 
-const EVENT_TYPES = [
-  "PAGE_VIEW",
-  "PERSONALIZATION_IMPRESSION",
-  "CTA_CLICK",
-  "FORM_START",
-  "FORM_SUBMIT",
-  "CONVERSION",
-];
+const EVENT_TYPES = ["PAGE_VIEW", "CTA_CLICK", "LEAD", "SALE"];
 
 export function WebhooksManager({
   organizationId,
@@ -26,7 +19,7 @@ export function WebhooksManager({
   const [webhooks, setWebhooks] = useState(initialWebhooks);
   const [creating, setCreating] = useState(false);
   const [url, setUrl] = useState("");
-  const [eventTypes, setEventTypes] = useState<string[]>(["CONVERSION"]);
+  const [eventTypes, setEventTypes] = useState<string[]>(["LEAD", "SALE"]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [newSecret, setNewSecret] = useState<string | null>(null);

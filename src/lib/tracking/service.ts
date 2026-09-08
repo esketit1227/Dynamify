@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/auth/errors";
-import { dispatchEvent } from "@/lib/integrations/service";
 import type { CollectEventInput } from "@/lib/validation/collect";
 import { Prisma } from "@/generated/prisma/client";
 
@@ -50,7 +49,14 @@ export async function recordEvent(input: CollectEventInput): Promise<void> {
     campaignId = campaign?.id;
   }
 
-  const event = await prisma.event.create({
+  // No webhook dispatch here — see docs/decisions.md D12. This whole
+  // Page/PageVersion/Event path is unreachable for any current traffic
+  // (nothing creates a Page with a publishedVersionId anymore; the one row
+  // that satisfies the lookup above predates the Site/CrawledPage
+  // architecture), so there's no real event here to honestly dispatch a
+  // webhook about. dispatchEvent's real caller is now recordSiteEvent
+  // (src/lib/embed/service.ts), against the current, live event pipeline.
+  await prisma.event.create({
     data: {
       organizationId: page.organizationId,
       pageId: page.id,
@@ -62,16 +68,5 @@ export async function recordEvent(input: CollectEventInput): Promise<void> {
       componentVariantId: input.componentVariantId,
       metadata: input.metadata as Prisma.InputJsonValue | undefined,
     },
-  });
-
-  // Fire-and-forget: webhook delivery is time-boxed and never throws (see
-  // dispatchEvent), so this never delays or fails the collection response.
-  void dispatchEvent({
-    organizationId: page.organizationId,
-    type: event.type,
-    pageId: event.pageId,
-    componentId: event.componentId,
-    componentVariantId: event.componentVariantId,
-    createdAt: event.createdAt,
   });
 }

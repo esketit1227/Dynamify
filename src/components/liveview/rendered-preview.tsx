@@ -20,6 +20,14 @@ const PERSONALIZED_GLOW_END = "rgba(31, 157, 85, 0)";
 // real data (shown in the "what changed" list), just not rendered here.
 const SKIPPED_TYPES = new Set(["CTA_HREF", "NAV_LABEL", "OTHER"]);
 
+// "none" never renders a dot (today's `undefined` behavior, unchanged);
+// "approved" is the existing filled --status-positive dot (already
+// "live" everywhere else in the app); "pending" is the same dot shape as
+// a hollow outline in --muted, not a new color — outline = proposed,
+// filled = confirmed, the same neutral/positive distinction
+// RULE_STATUS_BADGE already encodes for exactly this pair of states.
+export type AnnotationStatus = "none" | "pending" | "approved";
+
 function contentText(component: ResolvedPage["components"][number]): string {
   const text = (component.content as { text?: unknown }).text;
   return typeof text === "string" ? text : "";
@@ -89,6 +97,7 @@ export function RenderedPreview({
   onElementClick,
   selectedComponentId,
   annotations,
+  clickableComponentIds,
 }: {
   resolved: ResolvedPage;
   pageUrl: string;
@@ -112,7 +121,15 @@ export function RenderedPreview({
   // visible at a glance); a floating type/section label appears on hover
   // or when selected, the concrete match for the reference screenshot's
   // "Sections / Add Column" annotation tooltip.
-  annotations?: Map<string, { hasPersonalization: boolean }>;
+  annotations?: Map<string, { status: AnnotationStatus }>;
+  // ExperienceReview's use case: only elements that actually have a rule
+  // in *this* experience should respond to clicks — unlike /content,
+  // where everything is clickable (you can add a rule for anything
+  // there). Omitted (the default) keeps today's "everything clickable
+  // when onElementClick is given" behavior unchanged for every existing
+  // caller; supplied, it restricts clickability to exactly this set —
+  // everything else renders inert even though onElementClick exists.
+  clickableComponentIds?: Set<string>;
 }) {
   const reduceMotion = Boolean(useReducedMotion());
 
@@ -176,7 +193,8 @@ export function RenderedPreview({
               </p>
             ) : null;
 
-            const clickable = Boolean(onElementClick);
+            const clickable =
+              Boolean(onElementClick) && (!clickableComponentIds || clickableComponentIds.has(component.id));
             const selected = selectedComponentId === component.id;
             const annotation = annotations?.get(component.id);
             const wrapperClassName = clickable
@@ -202,12 +220,18 @@ export function RenderedPreview({
             const annotationLabel = component.section
               ? `${formatSectionLabel(component.section)} · ${elementTypeLabel(component.type)}`
               : elementTypeLabel(component.type);
+            const dotClassName =
+              annotation?.status === "approved"
+                ? "bg-[var(--status-positive)]"
+                : annotation?.status === "pending"
+                  ? "border border-[var(--muted)] bg-transparent"
+                  : null;
             const annotationMarkup = annotation ? (
               <>
-                {annotation.hasPersonalization ? (
+                {dotClassName ? (
                   <span
                     aria-hidden="true"
-                    className="absolute -right-1 -top-1 z-10 h-2 w-2 rounded-full bg-[var(--status-positive)]"
+                    className={`absolute -right-1 -top-1 z-10 h-2 w-2 rounded-full ${dotClassName}`}
                   />
                 ) : null}
                 <span

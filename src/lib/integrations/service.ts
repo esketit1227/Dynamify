@@ -2,7 +2,7 @@ import { randomBytes, createHmac } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { HttpError } from "@/lib/auth/errors";
 import { assertSafeExternalUrl, UnsafeUrlError } from "@/lib/security/ssrfGuard";
-import type { EventType, WebhookSubscription } from "@/generated/prisma/client";
+import type { SiteEventType, WebhookSubscription } from "@/generated/prisma/client";
 
 export class WebhookNotFoundError extends HttpError {
   constructor() {
@@ -13,7 +13,7 @@ export class WebhookNotFoundError extends HttpError {
 export type WebhookDTO = {
   id: string;
   url: string;
-  eventTypes: EventType[];
+  eventTypes: SiteEventType[];
   active: boolean;
   createdAt: string;
 };
@@ -44,7 +44,7 @@ export async function listWebhooks(organizationId: string): Promise<WebhookDTO[]
 export async function createWebhook(
   organizationId: string,
   url: string,
-  eventTypes: EventType[],
+  eventTypes: SiteEventType[],
 ): Promise<WebhookCreatedDTO> {
   try {
     await assertSafeExternalUrl(url);
@@ -69,12 +69,21 @@ export async function deleteWebhook(organizationId: string, webhookId: string): 
   await prisma.webhookSubscription.delete({ where: { id: webhookId } });
 }
 
+// Real, current SiteEvent fields (src/lib/embed/service.ts's
+// recordSiteEvent) — see docs/decisions.md D12 for why this replaced the
+// old Page/Event-shaped version. pageUrl is the visitor's actual URL, not
+// an internal id, since that's what's actually useful to a receiving
+// system; value/currency only ever set for LEAD/SALE, mirroring
+// SiteEvent's own column.
 type DispatchableEvent = {
   organizationId: string;
-  type: EventType;
-  pageId: string;
-  componentId?: string | null;
-  componentVariantId?: string | null;
+  type: SiteEventType;
+  siteId: string;
+  crawledPageId: string;
+  pageUrl: string;
+  contentElementId?: string | null;
+  value?: number | null;
+  currency?: string | null;
   createdAt: Date;
 };
 
@@ -98,9 +107,12 @@ async function deliver(webhook: WebhookSubscription, event: DispatchableEvent): 
 
   const body = JSON.stringify({
     type: event.type,
-    pageId: event.pageId,
-    componentId: event.componentId ?? undefined,
-    componentVariantId: event.componentVariantId ?? undefined,
+    siteId: event.siteId,
+    crawledPageId: event.crawledPageId,
+    pageUrl: event.pageUrl,
+    contentElementId: event.contentElementId ?? undefined,
+    value: event.value ?? undefined,
+    currency: event.currency ?? undefined,
     createdAt: event.createdAt.toISOString(),
   });
   const signature = createHmac("sha256", webhook.signingSecret).update(body).digest("hex");

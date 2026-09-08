@@ -8,6 +8,7 @@ import { enrichIp } from "@/lib/enrichment/ipFirmographics";
 import { computeIntentScore, stageForIntent } from "@/lib/visitors/inferProfile";
 import { shouldHoldOut } from "@/lib/experiments/holdout";
 import { applyBanditFiltering } from "@/lib/experiments/bandit";
+import { dispatchEvent } from "@/lib/integrations/service";
 import {
   findOrCreateCompany,
   upsertSession,
@@ -551,6 +552,25 @@ export async function recordSiteEvent(
       heldOut,
       context: (effectiveContext ?? {}) as object,
     },
+  });
+
+  // The real webhook trigger (docs/decisions.md D12) — fire-and-forget,
+  // time-boxed and never-throwing internally (dispatchEvent), so a broken
+  // or malicious subscriber endpoint can never delay or fail this public
+  // collection response. A held-out visit still dispatches: it's a real
+  // PAGE_VIEW/CTA_CLICK a subscriber's own system genuinely received,
+  // just one that didn't get personalized — the same posture the anonymous
+  // SiteEvent row above already takes.
+  void dispatchEvent({
+    organizationId: page.organizationId,
+    type: siteEvent.type,
+    siteId,
+    crawledPageId: page.id,
+    pageUrl: rawUrl,
+    contentElementId,
+    value: siteEvent.value,
+    currency: siteEvent.currency,
+    createdAt: siteEvent.createdAt,
   });
 
   // VisitorSession/Impression/Conversion (docs/visitor-data.md) — only

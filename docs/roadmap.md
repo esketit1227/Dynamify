@@ -2735,3 +2735,101 @@ tests/unit/experiments/banditStats.test.ts covering the Beta sampler and
 tests/integration/banditExperiments.test.ts covering the real embed-
 pipeline filtering, `runBanditWeightUpdates` end-to-end, and
 create/list/stop validation) && pnpm build` all clean.
+
+### 2026-09-08 — Fixed the dead webhook bug
+
+Requested directly, as a bug this session's own Lead/Sale Event Tracking
+entry had already flagged: a customer configuring a webhook at
+`/integrations` would see it created successfully but it would never
+fire, silently. Root cause confirmed by inspecting the code and the dev
+database before touching anything, rather than assumed: real, correct,
+SSRF-guarded and HMAC-signed delivery code (`dispatchEvent`,
+`src/lib/integrations/service.ts`) existed, but its only caller was
+gated behind the old, superseded `Page`/`PageVersion` hosted-page model —
+and nothing in the current app has created a `Page` row since the
+2026-08-26 architecture pivot. See `docs/decisions.md` D12 for the full
+reasoning, including why webhook filtering now reuses `SiteEventType`
+(`PAGE_VIEW`/`CTA_CLICK`/`LEAD`/`SALE`) instead of the old six-value
+`EventType` enum, and why the old `/api/collect` subsystem itself was
+left in place — confirmed dead, but a separate cleanup from this one bug.
+
+`dispatchEvent` is now called from `recordSiteEvent`
+(`src/lib/embed/service.ts`) — the real, live event pipeline — fire-and-
+forget, immediately after the real `SiteEvent` row is written, for every
+PAGE_VIEW, CTA_CLICK, LEAD, and SALE a real visitor produces. The webhook
+payload itself changed shape to match: real fields (`siteId`,
+`crawledPageId`, `pageUrl`, `contentElementId`, `value`/`currency`)
+instead of the old model's (`pageId`/`componentId`/`componentVariantId`).
+`/integrations`'s event-type picker now offers exactly the four real
+types instead of six, four of which never fired anything.
+
+A related gap found while in this code, flagged rather than fixed here:
+there's no way to pause a webhook without deleting it — `active` exists
+and `dispatchEvent` already honors it, but no route or UI ever sets it to
+`false`.
+
+Verified live in a real browser against the real dev server, logged in as
+the permanent preview account: created a webhook through the actual
+dashboard, confirmed only the new four event-type checkboxes appear,
+confirmed the create/list/delete flow and the one-time signing-secret
+display all work. `dispatchEvent`'s actual delivery — filtering, HMAC
+signing, tenant isolation, multi-webhook fan-out, resilience to an
+unreachable endpoint — and the regression itself (`recordSiteEvent`
+really triggering it for real PAGE_VIEW/CTA_CLICK/SALE events) are
+covered by 14 new tests using this codebase's own established SSRF-
+testing convention (a real DNS-resolvable `example.com` URL, with only
+the final socket write intercepted — the guard itself runs for real,
+never weakened for testability). `pnpm typecheck && pnpm lint && pnpm
+test (530 passing — 14 new in tests/integration/webhooks.test.ts) &&
+pnpm build` all clean.
+
+### 2026-09-08 — ExperienceReview: one annotated preview, not stacked collapsible sections
+
+Direct user feedback, verbatim: "now its just info diarrhea and stacks
+on stacks of collapsable sections... no human user wil use this as it
+is." `ExperienceReview` (`src/components/recommendations/experience-review.tsx`,
+rendered identically on Home's "Ready for your review" feed and on
+`/recommendations`) previously wrapped everything in an outer collapsible
+accordion, showed two full side-by-side `RenderedPreview` panels, then
+listed *every* rule in the experience as its own always-expanded card — a
+real test against elevenlabs.io produced 27 rows in that one flat list,
+several byte-identical repeated strings, no grouping by section.
+
+Applied the same pattern already proven on the `/content` page shipped
+the same week: one annotated `RenderedPreview` instead of a text list.
+`RenderedPreview`'s `annotations` prop generalized from a boolean
+(`hasPersonalization`) to a 3-state `AnnotationStatus` (`"none" |
+"pending" | "approved"`) — approved keeps the existing filled
+`--status-positive` dot; pending is the same dot as a hollow outline in
+`--muted`, no new color introduced. New `clickableComponentIds` prop
+restricts which elements respond to clicks (only ones with a real rule
+in *this* experience — unlike `/content`, where everything is
+clickable), additive and unused by every existing caller.
+
+The redesigned card: a grouped summary (section-count pills + pending/live
+split, replacing "Full experience · 27 pieces"), a two-option Default/
+audience toggle over one preview (replacing the two-panel layout, without
+losing the before/after comparison — switching tabs preserves the current
+selection), and clicking an annotated element opens a focused inline
+editor for just that one piece (the old `RuleRow` edit body, unwrapped
+from its per-row view/edit toggle) instead of a parallel wall of always-
+rendered cards. Same PATCH-then-optionally-approve network calls, same
+Approve all/Reject all bulk actions, reused verbatim — this was a UI
+reorganization, not a new backend contract; `pending-experiences-feed.tsx`
+and `/recommendations` needed zero changes.
+
+**Verified live against the exact site that produced the 27-row wall
+before**: the new card renders the grouped summary instead of a raw
+count, the toggle swaps one preview correctly, hovering an annotated
+element shows the "Section · Type" tooltip, clicking opens the inline
+editor, saving flips the dot from hollow to filled and is reflected
+correctly in the database (`APPROVED`, new content), and clicking an
+element with no rule in this experience does nothing (confirmed inert).
+Confirmed `/content` and Live View unaffected by the `annotations` shape
+generalization. `pnpm typecheck && pnpm lint && pnpm test (530, all
+passing — no new tests needed, this was a pure component reorganization
+with no new backend logic) && pnpm build` all clean.
+
+**Explicitly out of scope**: the three-section page-level stacking on
+`/recommendations` itself (Converting pages / Recommendations / Design a
+new page) — a separate, already-deferred decision, untouched here.

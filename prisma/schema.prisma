@@ -489,7 +489,12 @@ model WebhookSubscription {
   id             String      @id @default(cuid())
   organizationId String
   url            String
-  eventTypes     EventType[]
+  // Reuses SiteEventType (defined below, with SiteEvent) rather than the
+  // EventType enum the old Event model above still uses — see
+  // docs/decisions.md D12. Dispatch is wired to the current, real event
+  // pipeline (recordSiteEvent, src/lib/embed/service.ts), so the filter
+  // needs to speak that pipeline's actual taxonomy, not the retired one.
+  eventTypes     SiteEventType[]
   signingSecret  String
   active         Boolean     @default(true)
   createdAt      DateTime    @default(now())

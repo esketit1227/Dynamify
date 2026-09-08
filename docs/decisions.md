@@ -626,6 +626,91 @@ direct request that was explicit about wanting the narrower shape first.
 
 ---
 
+## D12. The dead webhook bug — reusing `SiteEventType`, not extending the old `EventType` — **decided 2026-09-08**
+
+**Decided: wire `dispatchEvent` into the real, current event pipeline
+(`recordSiteEvent`), and change `WebhookSubscription.eventTypes` to reuse
+`SiteEventType` (`PAGE_VIEW`/`CTA_CLICK`/`LEAD`/`SALE`) instead of keeping
+the old `EventType` enum
+(`PAGE_VIEW`/`PERSONALIZATION_IMPRESSION`/`CTA_CLICK`/`FORM_START`/
+`FORM_SUBMIT`/`CONVERSION`).** Requested directly, as a known, already-
+twice-flagged bug (`docs/roadmap.md`'s 2026-09-08 Lead/Sale entry, and the
+generated-experience entry before it): a customer could configure a
+webhook for these event types today and it would never fire, with no
+indication anything was wrong.
+
+**Root cause, confirmed by inspection, not assumption.** `dispatchEvent`/
+`deliver` (`src/lib/integrations/service.ts`) is real, correct,
+security-conscious code — SSRF-guarded at both registration and dispatch
+time, HMAC-signed, timeout-boxed, `redirect: "error"`. It was simply never
+called from anywhere reachable: its only caller was `recordEvent`
+(`src/lib/tracking/service.ts`), gated behind `prisma.page.findFirst({
+where: { publishedVersionId: { not: null } } })` — the old, superseded
+hosted-page model (D1–D6, below). Checked the dev database directly
+before writing any code: **zero** `Page`/`PageVersion` rows have been
+created since the 2026-08-26 architecture pivot (one ancient row from
+before it exists and satisfies the lookup, which is why `/api/collect`
+wasn't *quite* fully dead — but nothing in the current app, including the
+real embed script, has ever called it), and **zero**
+`WebhookSubscription` rows existed at all. The bug was real, exactly as
+flagged, and nothing depended on any of the old `EventType` values ever
+actually firing — because none of them, ever, had.
+
+**Why reuse `SiteEventType` rather than extend/keep `EventType`.** Of the
+old enum's six values, only `PAGE_VIEW` and `CTA_CLICK` map onto anything
+the current pipeline produces. `PERSONALIZATION_IMPRESSION` is now a
+richer, separate `Impression` model, not a generic event type;
+`FORM_START` has no current equivalent at all (nothing instruments
+in-page form interaction today); `FORM_SUBMIT` and `CONVERSION` both
+collapsed into the more specific `LEAD`/`SALE` split Lead/Sale Event
+Tracking added the same day. Rather than fabricate a lossy mapping (both
+`LEAD` and `SALE` under one `CONVERSION` bucket, discarding the value/
+currency distinction that feature deliberately added) or invent new
+instrumentation nothing asked for (a `FORM_START` signal), webhook
+filtering now speaks the exact same taxonomy `SiteEvent.type` already
+does — one canonical enum, not two that could drift apart again.
+`WebhookSubscription.eventTypes` is the only column this touches; the old
+`Event.type: EventType` column, and the enum itself, are untouched.
+
+**What was deliberately not touched.** `/api/collect`, `recordEvent`,
+`PageNotPublishedError`, and the underlying `Page`/`PageVersion`/
+`Campaign`/`Visitor`/`Event` models remain in place, confirmed-dead but
+out of scope here — removing a whole superseded subsystem is a real,
+separate cleanup, not an implicit side effect of fixing the one bug that
+was actually asked for. `recordEvent`'s own dead `dispatchEvent(...)` call
+was removed (it could no longer type-check against the new event shape,
+and fabricating old-model-to-new-model field mappings for code that never
+runs would have been dishonest rather than minimal); the function still
+records its `Event` row exactly as before.
+
+**A related, separate gap found and flagged, not fixed:** there is no way
+to pause a webhook without deleting it. `active` exists on the model and
+`dispatchEvent`'s filter already correctly honors it, but no route or UI
+control ever sets it to `false` — creation and deletion are the only two
+operations that exist. Worth a small follow-up, not folded in here.
+
+Verified: 14 new tests (`tests/integration/webhooks.test.ts`) — webhook
+CRUD including tenant isolation and unsafe-URL rejection at creation;
+`dispatchEvent`'s filtering (event type, `active`, organization), a
+correctly-HMAC-signed real payload, multi-webhook fan-out, and resilience
+to an unreachable endpoint; and the actual regression proof —
+`recordSiteEvent` (the real, live pipeline) genuinely triggering delivery
+for real PAGE_VIEW, CTA_CLICK, and SALE events. Follows this codebase's
+own established SSRF-testing convention exactly (`tests/unit/security/
+ssrfGuard.test.ts`'s `vi.stubGlobal("fetch", ...)` against a real,
+DNS-resolvable `example.com` URL) rather than weakening the guard for
+testability — `assertSafeExternalUrl`'s real DNS lookup and private-range
+checks run for real; only the final socket write is intercepted. Also
+verified live in a real browser against the real dev server, logged in as
+the permanent preview account: created a webhook through the actual
+`/integrations` dashboard, confirmed only the new `PAGE_VIEW`/
+`CTA_CLICK`/`LEAD`/`SALE` checkboxes are offered (the old four are gone),
+confirmed the one-time signing-secret display and the created row's
+event-type list render correctly, deleted it. `pnpm typecheck && pnpm
+lint && pnpm test (530 passing, 14 new) && pnpm build` all clean.
+
+---
+
 ### Superseded (old hosted-page architecture — 2026-08-26, no longer applicable)
 
 The prior D1–D6 (personalization resolution location, flash of default

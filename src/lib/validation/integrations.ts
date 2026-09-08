@@ -11,14 +11,9 @@ export const addDomainSchema = z.object({
 });
 export type AddDomainInput = z.infer<typeof addDomainSchema>;
 
-const eventTypes = [
-  "PAGE_VIEW",
-  "PERSONALIZATION_IMPRESSION",
-  "CTA_CLICK",
-  "FORM_START",
-  "FORM_SUBMIT",
-  "CONVERSION",
-] as const;
+// Mirrors SiteEventType exactly (docs/decisions.md D12) — the real,
+// current event taxonomy recordSiteEvent produces, not the old model's.
+const eventTypes = ["PAGE_VIEW", "CTA_CLICK", "LEAD", "SALE"] as const;
 
 export const createWebhookSchema = z.object({
   url: z.string().trim().url().max(2000),

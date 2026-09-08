@@ -43,12 +43,13 @@ export function ContentPageDetail({
 
   // getLiveViewDefinition's own query already filters personalizationRules
   // to status: APPROVED only (see src/lib/liveview/service.ts) — so a
-  // nonempty array here already means "has a live rule," no extra status
-  // check needed.
+  // nonempty array here already means "has a live rule." This page never
+  // has a "pending" case to represent, hence only "none" | "approved" of
+  // RenderedPreview's full three-state AnnotationStatus.
   const annotations = useMemo(() => {
-    const map = new Map<string, { hasPersonalization: boolean }>();
+    const map = new Map<string, { status: "none" | "approved" }>();
     for (const component of definition.components) {
-      map.set(component.id, { hasPersonalization: component.personalizationRules.length > 0 });
+      map.set(component.id, { status: component.personalizationRules.length > 0 ? "approved" : "none" });
     }
     return map;
   }, [definition]);
