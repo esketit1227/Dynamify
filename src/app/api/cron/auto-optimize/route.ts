@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { runAutoOptimize } from "@/lib/autoOptimize/service";
+import { runBanditWeightUpdates } from "@/lib/experiments/bandit";
 
 // docs/launch-plan.md §5C ("Auto-draft"). The actual behavior lives in
 // runAutoOptimize (src/lib/autoOptimize/service.ts) — this route only
@@ -30,6 +31,10 @@ export async function GET(request: Request) {
   const unauthorized = requireCronSecret(request);
   if (unauthorized) return unauthorized;
 
-  const result = await runAutoOptimize();
-  return NextResponse.json(result);
+  // Bandit weight recompute rides along on this same daily trigger — see
+  // src/lib/experiments/bandit.ts's runBanditWeightUpdates comment for why
+  // it isn't a separate vercel.json cron entry. Independent of
+  // runAutoOptimize: one failing does not block the other.
+  const [autoOptimize, banditExperiments] = await Promise.all([runAutoOptimize(), runBanditWeightUpdates()]);
+  return NextResponse.json({ autoOptimize, banditExperiments });
 }

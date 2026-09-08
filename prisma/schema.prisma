@@ -268,6 +268,7 @@ model Audience {
   campaigns                   Campaign[]
   elementPersonalizationRules ElementPersonalizationRule[]
   generatedExperiences        GeneratedExperience[]
+  banditExperiments           BanditExperiment[]
 
   @@index([organizationId])
 }
@@ -663,6 +664,7 @@ model ContentElement {
   variants             ElementVariant[]
   personalizationRules ElementPersonalizationRule[]
   siteEvents           SiteEvent[]
+  banditExperiments    BanditExperiment[]
 
   @@index([organizationId])
   @@index([crawledPageId])
@@ -714,6 +716,47 @@ model ElementPersonalizationRule {
   @@index([contentElementId])
   @@index([audienceId])
   @@index([generatedExperienceId])
+}
+
+enum BanditExperimentStatus {
+  RUNNING
+  STOPPED
+}
+
+// Two already-approved variants competing for the same (element, audience)
+// slot — allocation between them, never generation (docs/decisions.md D11).
+// ruleA/ruleB are plain non-FK string columns, matching Impression.ruleId's
+// own precedent exactly: an experiment stays inspectable even if a rule is
+// later deleted, rather than cascading away. Enforcing "both rules are
+// APPROVED and share this contentElementId+audienceId" and "at most one
+// RUNNING experiment per (contentElementId, audienceId)" happens in
+// application code (src/lib/experiments/bandit.ts), not a DB constraint —
+// Postgres/Prisma can't express a partial-unique ("unique only while
+// RUNNING") without raw SQL, and this mirrors how Site.holdbackPercent's
+// 0-50 bound is already an API-layer check, not a @@check.
+model BanditExperiment {
+  id               String                 @id @default(cuid())
+  organizationId   String
+  contentElementId String
+  audienceId       String
+  ruleAId          String
+  ruleBId          String
+  // Current allocation to arm A, 0-1. Recomputed by the daily cron
+  // (Thompson Sampling over real Impression/Conversion data — see
+  // src/lib/experiments/banditStats.ts). Starts, and stays, at 0.5 until
+  // each arm clears MIN_BANDIT_SAMPLE trials — docs/autonomy.md's own
+  // "refuse to act below threshold, serve the default and say so."
+  weightA          Float                  @default(0.5)
+  status           BanditExperimentStatus @default(RUNNING)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  contentElement ContentElement @relation(fields: [contentElementId], references: [id], onDelete: Cascade)
+  audience       Audience       @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([contentElementId])
+  @@index([audienceId])
 }
 
 enum GeneratedExperienceStatus {

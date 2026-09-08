@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Sparkles,
@@ -15,12 +15,14 @@ import {
   SlidersHorizontal,
   Lock,
   ShieldAlert,
+  FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { boundaryReason } from "@/lib/sites/boundaries";
 import type { ContentElementDTO } from "@/lib/sites/dto";
 import type { AudienceDTO } from "@/lib/audiences/dto";
+import type { BanditExperimentWithStatsDTO } from "@/lib/experiments/bandit";
 
 const BOUNDARY_LABEL = { ALLOWED: "Allowed", RESTRICTED: "Restricted", NEVER: "Never" } as const;
 
@@ -55,6 +57,12 @@ const STATUS_META = {
     note: "Paused — visitors see the default.",
   },
 };
+
+function formatArmRate(stats: { trials: number; successes: number }): string {
+  if (stats.trials === 0) return "No data yet";
+  const rate = (stats.successes / stats.trials) * 100;
+  return `${stats.successes}/${stats.trials} converted (${rate.toFixed(1)}%)`;
+}
 
 function ContentPreview({ elementType, content }: { elementType: string; content: string }) {
   if (IMAGE_TYPES.has(elementType) && content) {
@@ -105,6 +113,88 @@ export function ElementPersonalize({
   const [generating, setGenerating] = useState(false);
   const [busyRuleId, setBusyRuleId] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+
+  // Multi-armed bandit (docs/decisions.md D11) — a self-contained slice
+  // fetched by this component directly, the same way every other action
+  // here calls its own route rather than going through onChanged/props.
+  // Only ever offered for rules a human already approved through the
+  // existing flow above; never creates or approves a rule itself.
+  const [experiments, setExperiments] = useState<BanditExperimentWithStatsDTO[]>([]);
+  const [visitorTrackingEnabled, setVisitorTrackingEnabled] = useState(false);
+  const [experimentsLoaded, setExperimentsLoaded] = useState(false);
+  const [creatingExperimentForAudience, setCreatingExperimentForAudience] = useState<string | null>(null);
+  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([]);
+  const [experimentBusyId, setExperimentBusyId] = useState<string | null>(null);
+  const [experimentError, setExperimentError] = useState<string | null>(null);
+
+  async function loadExperiments() {
+    const res = await fetch(`/api/organizations/${organizationId}/content-elements/${element.id}/bandit-experiments`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setExperiments(data.experiments);
+    setVisitorTrackingEnabled(data.visitorTrackingEnabled);
+    setExperimentsLoaded(true);
+  }
+
+  useEffect(() => {
+    if (!open || experimentsLoaded) return;
+    fetch(`/api/organizations/${organizationId}/content-elements/${element.id}/bandit-experiments`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        setExperiments(data.experiments);
+        setVisitorTrackingEnabled(data.visitorTrackingEnabled);
+        setExperimentsLoaded(true);
+      });
+    // Runs once per open — guarded by experimentsLoaded itself, so it
+    // never refetches on every render while the panel stays open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, experimentsLoaded]);
+
+  function toggleRuleSelection(ruleId: string) {
+    setSelectedRuleIds((prev) => {
+      if (prev.includes(ruleId)) return prev.filter((id) => id !== ruleId);
+      if (prev.length >= 2) return prev; // exactly two arms, no more
+      return [...prev, ruleId];
+    });
+  }
+
+  async function createExperiment(audienceId: string, ruleAId: string, ruleBId: string) {
+    setExperimentError(null);
+    setExperimentBusyId("creating");
+    try {
+      const res = await fetch(`/api/organizations/${organizationId}/content-elements/${element.id}/bandit-experiments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audienceId, ruleAId, ruleBId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setExperimentError(data.error ?? "Couldn't start the experiment.");
+        return;
+      }
+      setCreatingExperimentForAudience(null);
+      setSelectedRuleIds([]);
+      await loadExperiments();
+    } catch {
+      setExperimentError("Something went wrong.");
+    } finally {
+      setExperimentBusyId(null);
+    }
+  }
+
+  async function stopExperiment(experimentId: string) {
+    setExperimentBusyId(experimentId);
+    try {
+      await fetch(
+        `/api/organizations/${organizationId}/content-elements/${element.id}/bandit-experiments/${experimentId}/stop`,
+        { method: "POST" },
+      );
+      await loadExperiments();
+    } finally {
+      setExperimentBusyId(null);
+    }
+  }
 
   async function addRule() {
     setError(null);
@@ -247,6 +337,33 @@ export function ElementPersonalize({
 
   const rules = element.personalizationRules;
   const hasLiveRule = rules.some((r) => r.status === "APPROVED");
+
+  // Today, the runner-up of two APPROVED rules on the same audience is
+  // silently dead — resolve()'s tie-break always picks the same winner.
+  // This is what makes it reachable: any audience with 2+ APPROVED rules
+  // can run them as a real experiment, and any audience with one already
+  // RUNNING stays visible here even if its rule set has since changed.
+  const approvedRules = rules.filter((r) => r.status === "APPROVED");
+  const approvedByAudience = new Map<string, typeof approvedRules>();
+  for (const r of approvedRules) {
+    const list = approvedByAudience.get(r.audienceId) ?? [];
+    list.push(r);
+    approvedByAudience.set(r.audienceId, list);
+  }
+  const runningExperimentByAudience = new Map(
+    experiments.filter((e) => e.status === "RUNNING").map((e) => [e.audienceId, e] as const),
+  );
+  const relevantAudienceIds = new Set([
+    ...[...approvedByAudience.entries()].filter(([, list]) => list.length >= 2).map(([id]) => id),
+    ...runningExperimentByAudience.keys(),
+  ]);
+  const relevantAudiences = [...relevantAudienceIds].map((audienceId) => ({
+    audienceId,
+    audienceName:
+      runningExperimentByAudience.get(audienceId)?.audienceName ?? approvedByAudience.get(audienceId)?.[0]?.audienceName ?? "",
+    pairRules: approvedByAudience.get(audienceId) ?? [],
+    runningExperiment: runningExperimentByAudience.get(audienceId),
+  }));
 
   return (
     <div className="mt-1.5">
@@ -420,6 +537,113 @@ export function ElementPersonalize({
               </div>
             );
           })}
+
+          {experimentsLoaded
+            ? relevantAudiences.map(({ audienceId, audienceName, pairRules, runningExperiment }) => (
+                <div key={audienceId} className="rounded-lg border border-border bg-surface p-3">
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <FlaskConical size={13} className="text-muted" />
+                    <p className="text-xs font-medium text-foreground">
+                      {runningExperiment ? `Experiment running — ${audienceName}` : `Test these against each other — ${audienceName}`}
+                    </p>
+                  </div>
+
+                  {!visitorTrackingEnabled ? (
+                    <p className="mb-2 flex items-start gap-1.5 rounded-md border border-border bg-background p-2 text-xs text-muted">
+                      <ShieldAlert size={13} className="mt-0.5 shrink-0" />
+                      This experiment can&apos;t learn until visitor tracking is turned on for this site — until
+                      then, traffic stays split evenly.
+                    </p>
+                  ) : null}
+
+                  {runningExperiment ? (
+                    <div className="flex flex-col gap-2">
+                      <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                        <div className="rounded-md border border-border bg-background p-2">
+                          <p className="text-[10px] uppercase tracking-wide text-muted">
+                            Arm A — {Math.round(runningExperiment.weightA * 100)}% of traffic
+                          </p>
+                          <p className="mt-1 text-foreground">{formatArmRate(runningExperiment.armA)}</p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-2">
+                          <p className="text-[10px] uppercase tracking-wide text-muted">
+                            Arm B — {Math.round((1 - runningExperiment.weightA) * 100)}% of traffic
+                          </p>
+                          <p className="mt-1 text-foreground">{formatArmRate(runningExperiment.armB)}</p>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={experimentBusyId === runningExperiment.id}
+                        onClick={() => stopExperiment(runningExperiment.id)}
+                        className="gap-1.5 self-start text-xs"
+                      >
+                        <PauseCircle size={13} />
+                        {experimentBusyId === runningExperiment.id ? "Stopping…" : "Stop experiment"}
+                      </Button>
+                    </div>
+                  ) : creatingExperimentForAudience === audienceId ? (
+                    <div className="flex flex-col gap-2">
+                      {experimentError ? <p className="text-xs text-danger">{experimentError}</p> : null}
+                      <p className="text-xs text-muted">Pick exactly two to compete for this audience:</p>
+                      <div className="flex flex-col gap-1.5">
+                        {pairRules.map((r) => (
+                          <label
+                            key={r.id}
+                            className="flex items-start gap-2 rounded-md border border-border bg-background p-2 text-xs"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedRuleIds.includes(r.id)}
+                              disabled={!selectedRuleIds.includes(r.id) && selectedRuleIds.length >= 2}
+                              onChange={() => toggleRuleSelection(r.id)}
+                              className="mt-0.5"
+                            />
+                            <ContentPreview elementType={element.elementType} content={r.content} />
+                          </label>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          disabled={selectedRuleIds.length !== 2 || experimentBusyId === "creating"}
+                          onClick={() => createExperiment(audienceId, selectedRuleIds[0], selectedRuleIds[1])}
+                          className="text-xs"
+                        >
+                          {experimentBusyId === "creating" ? "Starting…" : "Start experiment"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => {
+                            setCreatingExperimentForAudience(null);
+                            setSelectedRuleIds([]);
+                            setExperimentError(null);
+                          }}
+                          className="text-xs"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setCreatingExperimentForAudience(audienceId);
+                        setSelectedRuleIds(pairRules.slice(0, 2).map((r) => r.id));
+                      }}
+                      className="gap-1.5 text-xs"
+                    >
+                      <FlaskConical size={13} />
+                      Run these as an experiment
+                    </Button>
+                  )}
+                </div>
+              ))
+            : null}
 
           {element.boundary === "NEVER" ? (
             <div className="rounded-lg border border-dashed border-border p-3">

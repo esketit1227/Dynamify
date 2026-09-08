@@ -7,6 +7,7 @@ import { getLiveViewDefinition } from "@/lib/liveview/service";
 import { enrichIp } from "@/lib/enrichment/ipFirmographics";
 import { computeIntentScore, stageForIntent } from "@/lib/visitors/inferProfile";
 import { shouldHoldOut } from "@/lib/experiments/holdout";
+import { applyBanditFiltering } from "@/lib/experiments/bandit";
 import {
   findOrCreateCompany,
   upsertSession,
@@ -38,6 +39,21 @@ export type EmbedElement = {
 // omission.
 export type ConsentState = { necessary: boolean; analytics: boolean; personalization: boolean };
 export const DEFAULT_CONSENT: ConsentState = { necessary: true, analytics: false, personalization: false };
+
+// The exact same condition line 492's upsertSiteVisitor call already
+// requires before it will ever create a real, trackable visitor/session —
+// which is what later produces the Impression/Conversion rows a bandit
+// experiment reads (src/lib/experiments/banditStats.ts). Applying bandit
+// filtering to a visitorKey that wouldn't clear that gate would silently
+// split traffic for a visit that can never contribute a trial anyway —
+// worse, a *stale* cookie value from before tracking was turned off would
+// still get deterministically routed to one arm even though this site no
+// longer considers them tracked. Reused at both call sites below so
+// getEmbedElements (serving) and recordSiteEvent (recording) can never
+// disagree about whether an experiment applies to this visit.
+function experimentVisitorKey(visitorTrackingEnabled: boolean, consent: ConsentState, visitorKey?: string): string | undefined {
+  return visitorTrackingEnabled && consent.analytics && visitorKey ? visitorKey : undefined;
+}
 
 export type GeoHeaders = { country?: string; region?: string };
 
@@ -368,7 +384,12 @@ export async function getEmbedElements(
     return { elements, cacheable, visitorTrackingEnabled: page.visitorTrackingEnabled };
   }
 
-  const definition = await getLiveViewDefinition(page.organizationId, page.id);
+  let definition = await getLiveViewDefinition(page.organizationId, page.id);
+  definition = await applyBanditFiltering(
+    definition,
+    page.organizationId,
+    experimentVisitorKey(page.visitorTrackingEnabled, consent, visitorKey),
+  );
   const resolved = resolve(effectiveContext, definition);
 
   const seed = visitorKey ?? loadToken;
@@ -471,7 +492,12 @@ export async function recordSiteEvent(
     geo,
   );
 
-  const definition = await getLiveViewDefinition(page.organizationId, page.id);
+  let definition = await getLiveViewDefinition(page.organizationId, page.id);
+  definition = await applyBanditFiltering(
+    definition,
+    page.organizationId,
+    experimentVisitorKey(page.visitorTrackingEnabled, consent, visitorKey),
+  );
   const resolved = resolve(effectiveContext ?? {}, definition);
 
   let contentElementId: string | undefined;

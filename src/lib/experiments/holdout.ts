@@ -12,8 +12,11 @@
 // independent calls for the same page load agree without coordination.
 
 // djb2 — simple, well-distributed enough for a non-cryptographic traffic
-// split, no dependency needed.
-function hashString(input: string): number {
+// split, no dependency needed. Exported for src/lib/experiments/bandit.ts,
+// which needs the exact same deterministic-hash-into-a-percentage
+// mechanism for a different decision (which arm, not holdout-or-not) —
+// reused rather than reimplemented, so both stay consistent by construction.
+export function hashString(input: string): number {
   let hash = 5381;
   for (let i = 0; i < input.length; i++) {
     hash = (hash * 33) ^ input.charCodeAt(i);

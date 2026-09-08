@@ -2639,3 +2639,99 @@ errors) after the `ReviewPanel`/`LIBRARY_TYPES` extractions. `pnpm typecheck
 && pnpm lint && pnpm test (10 new in tests/integration/content.test.ts,
 covering counts/headline-selection/org-scoping for `listContentPages` and
 `getSiteWideImageLibrary`) && pnpm build` all clean.
+
+### 2026-09-08 — Multi-Armed Bandit: real traffic allocation between two approved variants
+
+Requested directly, alongside Lead/Sale Event Tracking above (which this
+depends on as its reward signal). `docs/autonomy.md` designed this in
+depth but nothing was built; confirmed by grep before starting — zero
+bandit-related code existed anywhere. Two shape questions were put to the
+user directly rather than guessed, since either one wrong would have
+meant redesigning mid-build: reward signal (Leads/Sales vs. CTA clicks)
+and experiment shape (2 arms manually paired vs. something more open-
+ended). Both answered as the fuller option. See `docs/decisions.md` D11
+for the full reasoning, including the real, non-optional consequence
+Leads/Sales-as-signal creates: **this bandit can only ever learn on sites
+that also have `Site.visitorTrackingEnabled` on** — a site without it
+still gets an honest, permanent 50/50 split, never a fabricated verdict.
+
+`resolve()` (`packages/sdk/src/resolve.ts`) is unmodified — CLAUDE.md
+calls it non-negotiable, and it stays a pure, deterministic function.
+Allocation reuses `holdout.ts`'s existing trick exactly: a deterministic,
+hash-seeded decision (`selectBanditArm`, salted per-visitor and per-
+experiment) that filters which candidate rule reaches `resolve()`, rather
+than touching the engine itself. New: `BanditExperiment`
+(`prisma/schema.prisma`) pairs two already-*APPROVED* rules on the same
+(element, audience) slot — the bandit only ever decides allocation
+between things a human already approved through the existing flow, never
+generation or auto-approval, so "nothing goes live unapproved" holds
+exactly as before. No new write-path counters exist: a tracked visitor's
+exposure already produces a real `Impression` row keyed by `ruleId`, and
+a LEAD/SALE already produces a real `Conversion` linked to their session
+history, so `computeArmStats` (`src/lib/experiments/banditStats.ts`)
+derives trials/successes by reading both fresh, at request time, cross-
+session (a demo request today and a sale next week are the same buying
+journey, not two disconnected visits).
+
+Weights are recomputed once a day via Thompson Sampling
+(`computeWeightA`, Beta-Bernoulli posteriors sampled through a Gamma/
+Box-Muller implementation — new, dependency-free numerical code; the one
+deliberate, documented use of `Math.random()` in this codebase outside
+tests, since it runs server-side off the request path and only its
+*output*, a stored weight, ever reaches the deterministic visitor-facing
+code). Below `MIN_BANDIT_SAMPLE` (30) on either arm it refuses to act and
+serves the honest default 50/50 rather than reallocating on noise;
+clamped to `[0.1, 0.9]` so neither arm is ever fully starved and a human
+still has to explicitly stop an experiment to end it. Folded into the
+existing `/api/cron/auto-optimize` route rather than a second
+`vercel.json` entry — Vercel Hobby's once-a-day cron limit is already a
+documented constraint this codebase works within.
+
+`BanditExperiment` deliberately has no `@@unique` on
+`(contentElementId, audienceId, status)` — Postgres/Prisma can't express
+"unique only when RUNNING" without raw SQL — so "at most one RUNNING
+experiment per slot" is an application-layer check in
+`createBanditExperiment`, the same posture `Site.holdbackPercent`'s 0–50
+bound already uses. New API routes under `.../content-elements/[elementId]/
+bandit-experiments/` (create/list/stop), validating both rules exist,
+belong to this org+element, share the given audience, are both APPROVED,
+and aren't the same rule. UI in `element-personalize.tsx`: any audience
+with 2+ APPROVED rules — today, the runner-up is silently dead, since
+`resolve()`'s tie-break always picks the same winner — gets a "Run these
+as an experiment" picker; once running, live per-arm trial/success stats
+(computed fresh on every read, not the cron's last stored value) and a
+"Stop experiment" button; a persistent banner when visitor tracking is
+off, stated honestly rather than hidden.
+
+Verified live, not just typechecked, in two passes. Backend: seeded a
+real 2-arm experiment under a real org, drove 300 distinct visitor keys
+through the actual `getEmbedElements`/`recordSiteEvent` pipeline (every
+single one landed on the same arm `selectBanditArm` independently
+predicted; the aggregate split matched `weightA` within tolerance),
+seeded ~80%-vs-~10% real conversions through the same pipeline, ran the
+real `runBanditWeightUpdates` and watched `weightA` shift from 0.5 to
+0.9 (the cap) and stay there, confirmed an untracked request was
+completely unaffected by the now-skewed weight, then stopped the
+experiment and confirmed two previously-diverging visitors converged
+back to `resolve()`'s single deterministic winner. Browser: logged into
+the real dev server as the permanent preview account, opened a live
+page's element in `/content/[pageId]`, ran the full picker → running →
+stats → stop flow, and separately confirmed the visitor-tracking-off
+banner renders correctly on a second, untracked site. All seeded data
+removed afterward; the preview account itself untouched.
+
+Explicitly out of scope, per the user's own choices: contextual bandits
+(per-segment *within* an audience); more than 2 arms; CTA-click or any
+other configurable reward signal; auto-creation of experiments (always a
+manual, two-already-approved-rules action); Live View simulator support
+for previewing a running split (Live View shows the plain unfiltered
+tie-break, unchanged).
+
+`pnpm typecheck && pnpm lint && pnpm test (516 passing — 35 new: 5 in
+tests/unit/experiments/bandit.test.ts covering `selectBanditArm`'s
+determinism and proportionality, 9 in
+tests/unit/experiments/banditStats.test.ts covering the Beta sampler and
+`computeWeightA`'s thresholding/clamping, 21 in
+tests/integration/banditExperiments.test.ts covering the real embed-
+pipeline filtering, `runBanditWeightUpdates` end-to-end, and
+create/list/stop validation) && pnpm build` all clean.

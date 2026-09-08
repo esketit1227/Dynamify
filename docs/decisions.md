@@ -519,6 +519,113 @@ deliberate decision.
 
 ---
 
+## D11. Multi-Armed Bandit — reward signal and experiment shape — **decided 2026-09-08**
+
+**Decided: Leads/Sales as the reward signal (not CTA clicks); exactly 2
+arms, manually paired by the merchant from already-*APPROVED* rules (not
+an open-ended N-arm, auto-created shape).** Requested directly, alongside
+Lead/Sale Event Tracking the same day — this feature depends on that one
+as its signal source. `docs/autonomy.md` had already designed a bandit in
+real depth (Thompson Sampling, contextual variants, auto-tuning) but
+nothing was built; confirmed by grep before starting. Both shape
+questions were put to the user directly before designing further, since
+guessing wrong on either would have meant a real redesign partway
+through, not a small course-correction.
+
+**Why the reward signal choice isn't cosmetic.** A CTA click is available
+on every request, generic-traffic or tracked, because it's just another
+anonymous `SiteEvent` — same shape `PAGE_VIEW` already has. A Lead or Sale
+is different in a way that has a real, non-optional consequence: it often
+happens on a *different page load* than the one being tested (a pricing-
+page headline experiment; the sale itself completes on the checkout
+confirmation page, possibly a different session entirely), so attributing
+it back to an arm requires a **persistent** visitor identity across page
+loads — a per-request token isn't enough. **This bandit can therefore
+only ever learn on sites that also have `Site.visitorTrackingEnabled`
+on** — the existing, off-by-default, legally-flagged (D5) opt-in. This
+feature doesn't touch that decision or widen it; it just inherits it as a
+hard prerequisite, stated here plainly rather than discovered later by a
+confused merchant watching a split never move. A site without tracking on
+can still create an experiment — it isn't blocked — but it sits at an
+honest, permanent 50/50 forever, correctly reported as such in the UI
+(`element-personalize.tsx`'s tracking-off banner), never fabricating a
+verdict from data it structurally cannot have.
+
+**Compatible with the existing architecture, the same way D9's revision
+was** — this adds a new *allocation* mechanism around the personalization
+engine, not a change to it. `resolve()`/`compareCandidates`
+(`packages/sdk/src/resolve.ts`) is completely unmodified — CLAUDE.md
+calls this engine non-negotiable, and its 4-level deterministic tie-break
+(priority → specificity → `updatedAt` → rule id) still runs exactly as
+before. `applyBanditFiltering` (`src/lib/experiments/bandit.ts`) reuses
+`holdout.ts`'s existing trick verbatim — a deterministic, hash-seeded
+decision (`selectBanditArm`, salted by visitor *and* experiment id so
+concurrent experiments never correlate for the same visitor) that removes
+the losing arm's rule from the candidate set *before* `resolve()` ever
+sees it. From the engine's point of view, exactly one rule existed for
+that slot — the same shape it already handles for every other
+single-winner case.
+
+**No new write-path counters exist.** A tracked visitor's exposure to a
+rule already produces a real `Impression` row keyed by `ruleId`
+(`src/lib/visitors/service.ts`); a LEAD/SALE already produces a real
+`Conversion` linked to that visitor's session history. `computeArmStats`
+(`src/lib/experiments/banditStats.ts`) derives trials/successes by
+reading both, fresh, whenever a weight is recomputed or a merchant views
+the stats — and deliberately **across sessions**: a demo request today
+and a sale next week are one buying journey, not two disconnected visits,
+and joining by `visitorId` rather than `sessionId` is what makes that
+work without reopening D7's anonymous-by-default posture. No new
+visitor-linking schema was needed at all: arm assignment is a pure
+function of `(visitorKey, experimentId, weightA)`, independently
+re-derivable at any later point — exactly like `heldOut` already is —
+so nothing needs to persist which arm a given page view belonged to.
+
+**`BanditExperiment` has no `@@unique` on
+`(contentElementId, audienceId, status)`.** Postgres/Prisma can't express
+"unique only when RUNNING" without a raw partial index; "at most one
+RUNNING experiment per slot" is instead an application-layer check in
+`createBanditExperiment`, the same posture `Site.holdbackPercent`'s 0–50
+bound already uses elsewhere in this codebase. A closable gap, not a
+silently-accepted one: a race between two concurrent creates for the same
+slot isn't fully closed by this check alone, acceptable here because this
+is a manual, low-frequency dashboard action by a single merchant, not a
+public or high-volume path.
+
+**Two arms, never generated or auto-approved.** The bandit only ever
+decides *allocation* between two rules a human already approved through
+the existing flow — it never creates, edits, or approves a rule itself.
+This is `docs/autonomy.md`'s own allocation-vs-generation distinction,
+and it's what keeps CLAUDE.md's "nothing goes live unapproved" true
+without any special-casing: the two rules were already live and approved
+before the experiment existed; stopping the experiment doesn't touch
+their status either, it just turns the split back into `resolve()`'s
+plain single-winner tie-break.
+
+**Weight recompute rides the existing cron**, not a new
+`vercel.json` entry — Vercel Hobby's once-a-day cron limit is already a
+documented constraint this codebase works within (`src/app/api/cron/
+auto-optimize/route.ts`), and a second scheduled trigger would have
+reopened whether that limit is per-job or per-project instead of sidestepping
+the question entirely.
+
+Live verification detail (300 real visitor keys through the actual embed
+pipeline, a real weight shift via the real cron, a real browser session
+through `/content/[pageId]`) is recorded in `docs/roadmap.md`'s
+2026-09-08 entry rather than duplicated here — this section is the
+reasoning; that one is the proof.
+
+**Explicitly not built, by the user's own choice, not an oversight:**
+contextual bandits (per-segment reward *within* one audience —
+`docs/autonomy.md`'s literal framing); more than 2 arms; a configurable
+reward signal (CTA clicks or anything else); auto-created experiments.
+None of these are precluded by anything shipped here — `ArmStats`,
+`selectBanditArm`, and the schema would all extend rather than need
+rework — but building them now would have been scope creep against a
+direct request that was explicit about wanting the narrower shape first.
+
+---
+
 ### Superseded (old hosted-page architecture — 2026-08-26, no longer applicable)
 
 The prior D1–D6 (personalization resolution location, flash of default
