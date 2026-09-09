@@ -123,6 +123,47 @@ describe("listContentPages", () => {
     expect(twoHeadlinesPage?.headline).toBe("First headline");
   });
 
+  it("picks up subheadline and CTA label alongside the headline, for the card's mini preview", async () => {
+    const { organization } = await createOrgWithUser();
+    await seedCrawledPage(organization.id, "https://example.com", [
+      { elementType: "HEADLINE", section: "HERO", currentContent: "Ship personalized pages" },
+      { elementType: "SUBHEADLINE", section: "HERO", currentContent: "One page, every visitor." },
+      { elementType: "BODY", section: "HERO", currentContent: "Not part of the mini preview." },
+      { elementType: "CTA_LABEL", section: "HERO", currentContent: "Get started" },
+    ]);
+
+    const pages = await listContentPages(organization.id);
+
+    expect(pages[0]).toMatchObject({
+      headline: "Ship personalized pages",
+      subheadline: "One page, every visitor.",
+      ctaLabel: "Get started",
+    });
+  });
+
+  it("subheadline and ctaLabel are null when the page has neither, independent of the headline", async () => {
+    const { organization } = await createOrgWithUser();
+    await seedCrawledPage(organization.id, "https://example.com", [
+      { elementType: "HEADLINE", section: "HERO", currentContent: "Just a headline" },
+    ]);
+
+    const pages = await listContentPages(organization.id);
+
+    expect(pages[0]).toMatchObject({ headline: "Just a headline", subheadline: null, ctaLabel: null });
+  });
+
+  it("picks the first CTA_LABEL by order when a page has more than one", async () => {
+    const { organization } = await createOrgWithUser();
+    await seedCrawledPage(organization.id, "https://example.com", [
+      { elementType: "CTA_LABEL", section: "HERO", currentContent: "Start free trial" },
+      { elementType: "CTA_LABEL", section: "FEATURES", currentContent: "See pricing" },
+    ]);
+
+    const pages = await listContentPages(organization.id);
+
+    expect(pages[0].ctaLabel).toBe("Start free trial");
+  });
+
   it("is org-scoped — never lists another org's pages", async () => {
     const { organization: orgA } = await createOrgWithUser();
     const { organization: orgB } = await createOrgWithUser();

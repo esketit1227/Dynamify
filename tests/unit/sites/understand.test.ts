@@ -82,9 +82,36 @@ describe("understandingSchema — truncate, don't reject, on an over-length fiel
     expect(result.success).toBe(false);
   });
 
-  it("still enforces the array-length cap on tone/vocabulary/valueProps/pages (structural, not truncatable)", () => {
+  // Independently reproduced against fluencify.io, same day: 11
+  // brandTone.vocabulary items against a hard .max(10) rejected an
+  // otherwise-good result — an array-length overage, not a string-length
+  // one, but the identical "don't discard a good result" bug. Truncates
+  // to the first N rather than rejecting, same as the string fields above.
+  it("truncates over-length tone/vocabulary/valueProps arrays instead of rejecting", () => {
     const result = understandingSchema.safeParse(
-      validInput({ valueProps: Array.from({ length: 11 }, (_, i) => `prop ${i}`) }),
+      validInput({
+        brandTone: {
+          tone: Array.from({ length: 15 }, (_, i) => `tone ${i}`),
+          vocabulary: Array.from({ length: 11 }, (_, i) => `word ${i}`),
+          formality: "casual",
+        },
+        valueProps: Array.from({ length: 11 }, (_, i) => `prop ${i}`),
+      }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.brandTone.tone).toHaveLength(10);
+      expect(result.data.brandTone.vocabulary).toHaveLength(10);
+      expect(result.data.valueProps).toHaveLength(10);
+      // Truncation keeps the first N, not an arbitrary subset.
+      expect(result.data.valueProps[0]).toBe("prop 0");
+      expect(result.data.valueProps[9]).toBe("prop 9");
+    }
+  });
+
+  it("still rejects a structurally wrong shape for pages/classifiedElements (untouched by this fix)", () => {
+    const result = understandingSchema.safeParse(
+      validInput({ pages: [{ url: "https://example.com", classifiedElements: "not an array" }] }),
     );
     expect(result.success).toBe(false);
   });

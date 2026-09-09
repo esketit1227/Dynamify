@@ -3,14 +3,40 @@ import { Badge } from "@/components/ui/badge";
 import { sectionLabel } from "@/lib/format/labels";
 import type { ContentPageSummaryDTO } from "@/lib/content/service";
 
-// Real crawled content, styled as a card — deliberately not a fabricated
-// visual thumbnail. CrawledPage has no screenshot to draw from, and this
-// codebase has a strong, repeated ethos against ever showing something
-// that looks more "real"/generated than it is (see PageDesignPreview's own
-// comment on the same point). One real headline string + real counts is
-// cheap, honest, and the one thing worth showing before a click — not
-// dozens of full RenderedPreview mounts, which would be both illegible at
-// card scale and real, avoidable animation/render cost.
+// Real crawled content, styled as a mini page preview — deliberately not
+// a fabricated visual thumbnail. CrawledPage has no screenshot to draw
+// from, and this codebase has a strong, repeated ethos against ever
+// showing something that looks more "real"/generated than it is (see
+// PageDesignPreview's own comment on the same point). This renders the
+// page's own real, default (unpersonalized — the grid has no visitor to
+// resolve against) headline/subheadline/CTA as a small static layout,
+// echoing RenderedPreview's visual language without literally mounting
+// it: no animation, no click handling, no scroll — real, avoidable cost
+// at grid scale (same reasoning PageDesignPreview's own header comment
+// gives for not building on RenderedPreview either), just a smaller,
+// presentational sibling.
+function ContentPagePreview({ page }: { page: ContentPageSummaryDTO }) {
+  if (!page.headline && !page.subheadline && !page.ctaLabel) {
+    return (
+      <p className="line-clamp-2 text-lg font-semibold text-foreground">{page.title ?? "Untitled page"}</p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {page.headline ? (
+        <p className="line-clamp-2 text-lg font-semibold tracking-tight text-foreground">{page.headline}</p>
+      ) : null}
+      {page.subheadline ? <p className="line-clamp-2 text-sm text-muted">{page.subheadline}</p> : null}
+      {page.ctaLabel ? (
+        <span className="mt-0.5 inline-flex w-fit rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background">
+          {page.ctaLabel}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function ContentPageCard({ page }: { page: ContentPageSummaryDTO }) {
   return (
     <Link
@@ -25,9 +51,7 @@ function ContentPageCard({ page }: { page: ContentPageSummaryDTO }) {
       </div>
 
       <div className="flex flex-1 flex-col gap-3 p-4">
-        <p className="line-clamp-2 text-lg font-semibold text-foreground">
-          {page.headline ?? page.title ?? "Untitled page"}
-        </p>
+        <ContentPagePreview page={page} />
 
         {page.sectionCounts.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">

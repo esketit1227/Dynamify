@@ -1,15 +1,19 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FormError } from "@/components/ui/form-error";
 import { RenderedPreview } from "@/components/liveview/rendered-preview";
+import { WebsitePreview } from "@/components/liveview/website-preview";
 import { sectionLabel, elementTypeLabel } from "@/lib/format/labels";
 import type { ResolvedPage } from "@dynamify/personalization-sdk";
 import type { GeneratedExperienceDTO, PreviewElementDTO } from "@/lib/sites/generateExperience";
 import type { ElementPersonalizationRuleDTO } from "@/lib/sites/personalization";
+
+const EMPTY_CONTEXT = {};
 
 const EXPERIENCE_STATUS_LABEL: Record<GeneratedExperienceDTO["status"], string> = {
   PENDING: "Pending review",
@@ -42,18 +46,29 @@ const METHOD_LABEL: Record<string, string> = {
 // generated for it, so this overlays that mapping directly rather than
 // fabricating a VisitorContext that would satisfy the audience's own
 // targeting rules.
-function buildPreview(experience: GeneratedExperienceDTO, applyExperience: boolean): ResolvedPage {
+//
+// `draft`, when given, overlays whatever's currently typed in the side
+// panel for the one element being edited — the "live preview as you type"
+// requirement — without touching matchedVariantId/matchedRuleId (those
+// still reflect the *saved* rule, so the personalized-glow animation keeps
+// meaning "this was already personalized," not "you're currently typing").
+function buildPreview(
+  experience: GeneratedExperienceDTO,
+  applyExperience: boolean,
+  draft?: { contentElementId: string; content: string },
+): ResolvedPage {
   const byElement = new Map(experience.rules.map((r) => [r.contentElementId, r] as const));
   return {
     id: experience.crawledPageId,
     components: experience.pageElements.map((el, order) => {
       const rule = applyExperience ? byElement.get(el.id) : undefined;
+      const draftContent = applyExperience && draft?.contentElementId === el.id ? draft.content : undefined;
       return {
         id: el.id,
         type: el.elementType,
         section: el.section,
         order,
-        content: { text: rule ? rule.content : el.currentContent },
+        content: { text: draftContent ?? (rule ? rule.content : el.currentContent) },
         matchedVariantId: rule?.elementVariantId,
         matchedRuleId: rule?.id,
       };
@@ -62,23 +77,30 @@ function buildPreview(experience: GeneratedExperienceDTO, applyExperience: boole
 }
 
 // The focused editor for whichever single element is currently selected —
-// replaces the old always-rendered-per-row list entirely. Selecting an
+// replaces the old always-rendered-per-row list entirely, and now a real
+// side panel (same slide-over pattern as review-panel.tsx, not an inline
+// card) with the preview updating live as you type rather than only after
+// Save — `content`/`onContentChange` are controlled from ExperienceReview
+// so it can feed the current draft into buildPreview. Selecting an
 // annotation *is* the entry point now, so there's no separate view/edit
 // toggle: this only ever renders in edit mode.
 function SelectedElementEditor({
   organizationId,
   rule,
   element,
+  content,
+  onContentChange,
   onChanged,
   onClose,
 }: {
   organizationId: string;
   rule: ElementPersonalizationRuleDTO;
   element: PreviewElementDTO | undefined;
+  content: string;
+  onContentChange: (content: string) => void;
   onChanged: (rule: ElementPersonalizationRuleDTO) => void;
   onClose: () => void;
 }) {
-  const [content, setContent] = useState(rule.content);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,55 +136,85 @@ function SelectedElementEditor({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-surface p-3">
-      <div className="mb-2 flex items-start justify-between gap-2">
-        <div>
-          <p className="text-[11px] font-medium tracking-wide text-muted uppercase">
-            {element ? `${sectionLabel(element.section)} · ${elementTypeLabel(element.elementType)}` : ""}
-          </p>
-          <div className="mt-1 flex items-center gap-2 text-xs text-muted">
-            <span>{METHOD_LABEL[rule.method] ?? rule.method}</span>
-            <Badge variant={RULE_STATUS_BADGE[rule.status] ?? "neutral"}>
-              {RULE_STATUS_LABEL[rule.status] ?? rule.status}
-            </Badge>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="shrink-0 rounded-md p-1 text-muted transition-colors hover:bg-background hover:text-foreground"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <FormError message={error} />
-      <textarea
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        rows={4}
-        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.15 }}
+        className="fixed inset-0 z-40 bg-foreground/10"
+        onClick={onClose}
+        aria-hidden="true"
       />
-      <div className="mt-2 flex items-center gap-2">
-        {rule.status === "APPROVED" ? (
-          <Button type="button" disabled={busy || !content.trim()} onClick={() => save(false)}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
-        ) : (
-          <>
-            <Button type="button" variant="secondary" disabled={busy || !content.trim()} onClick={() => save(false)}>
+      <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit this element"
+        initial={{ x: "100%" }}
+        animate={{ x: 0 }}
+        exit={{ x: "100%" }}
+        transition={{ type: "tween", duration: 0.2 }}
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col overflow-y-auto border-l border-border bg-surface p-5 shadow-xl"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium tracking-wide text-muted uppercase">
+              {element ? sectionLabel(element.section) : ""}
+            </p>
+            <h2 className="text-sm font-semibold text-foreground">
+              {element ? elementTypeLabel(element.elementType) : ""}
+            </h2>
+            <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+              <span>{METHOD_LABEL[rule.method] ?? rule.method}</span>
+              <Badge variant={RULE_STATUS_BADGE[rule.status] ?? "neutral"}>
+                {RULE_STATUS_LABEL[rule.status] ?? rule.status}
+              </Badge>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-background hover:text-foreground"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <FormError message={error} />
+        <p className="mb-1.5 text-xs text-muted">
+          Updates the preview as you type — nothing is saved until you choose an option below.
+        </p>
+        <textarea
+          value={content}
+          onChange={(e) => onContentChange(e.target.value)}
+          rows={6}
+          autoFocus
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+        />
+        <div className="mt-3 flex items-center gap-2">
+          {rule.status === "APPROVED" ? (
+            <Button type="button" disabled={busy || !content.trim()} onClick={() => save(false)}>
               {busy ? "Saving…" : "Save"}
             </Button>
-            <Button type="button" disabled={busy || !content.trim()} onClick={() => save(true)}>
-              {busy ? "Saving…" : "Save & make live"}
-            </Button>
-          </>
-        )}
-        <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
-          Cancel
-        </Button>
-      </div>
-    </div>
+          ) : (
+            <>
+              <Button type="button" variant="secondary" disabled={busy || !content.trim()} onClick={() => save(false)}>
+                {busy ? "Saving…" : "Save"}
+              </Button>
+              <Button type="button" disabled={busy || !content.trim()} onClick={() => save(true)}>
+                {busy ? "Saving…" : "Save & make live"}
+              </Button>
+            </>
+          )}
+          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </motion.div>
+    </AnimatePresence>
   );
 }
 
@@ -177,6 +229,8 @@ export function ExperienceReview({
 }) {
   const [viewingAudience, setViewingAudience] = useState(true);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [draftContent, setDraftContent] = useState("");
+  const [websiteAvailable, setWebsiteAvailable] = useState(true);
   const [busy, setBusy] = useState(false);
   const canAct = experience.status === "PENDING" || experience.status === "PARTIALLY_APPROVED";
 
@@ -220,6 +274,18 @@ export function ExperienceReview({
   const approvedCount = experience.rules.filter((r) => r.status === "APPROVED").length;
   const pendingCount = experience.rules.length - approvedCount;
   const selectedRule = experience.rules.find((r) => r.contentElementId === selectedElementId) ?? null;
+
+  function selectElement(elementId: string) {
+    const rule = experience.rules.find((r) => r.contentElementId === elementId);
+    if (!rule) return;
+    setSelectedElementId(elementId);
+    setDraftContent(rule.content);
+  }
+
+  function closeEditor() {
+    setSelectedElementId(null);
+    setDraftContent("");
+  }
 
   function updateRule(updated: ElementPersonalizationRuleDTO) {
     onChanged({ ...experience, rules: experience.rules.map((r) => (r.id === updated.id ? updated : r)) });
@@ -293,12 +359,25 @@ export function ExperienceReview({
         </button>
       </div>
 
-      <div className="mt-3">
+      <div className={`mt-3 grid grid-cols-1 gap-3 ${websiteAvailable ? "xl:grid-cols-2" : ""}`}>
+        {websiteAvailable ? (
+          <WebsitePreview
+            organizationId={organizationId}
+            pageId={experience.crawledPageId}
+            context={EMPTY_CONTEXT}
+            label="Live site, right now"
+            onAvailabilityChange={setWebsiteAvailable}
+          />
+        ) : null}
         <RenderedPreview
-          resolved={buildPreview(experience, viewingAudience)}
+          resolved={buildPreview(
+            experience,
+            viewingAudience,
+            selectedElementId ? { contentElementId: selectedElementId, content: draftContent } : undefined,
+          )}
           pageUrl={experience.pageUrl}
           label={viewingAudience ? experience.audienceName : "Default"}
-          onElementClick={viewingAudience ? setSelectedElementId : undefined}
+          onElementClick={viewingAudience ? selectElement : undefined}
           selectedComponentId={viewingAudience ? selectedElementId : undefined}
           annotations={viewingAudience ? ruleAnnotations : undefined}
           clickableComponentIds={viewingAudience ? ruleElementIds : undefined}
@@ -306,16 +385,16 @@ export function ExperienceReview({
       </div>
 
       {viewingAudience && selectedRule ? (
-        <div className="mt-3">
-          <SelectedElementEditor
-            key={selectedRule.id}
-            organizationId={organizationId}
-            rule={selectedRule}
-            element={elementById.get(selectedRule.contentElementId)}
-            onChanged={updateRule}
-            onClose={() => setSelectedElementId(null)}
-          />
-        </div>
+        <SelectedElementEditor
+          key={selectedRule.id}
+          organizationId={organizationId}
+          rule={selectedRule}
+          element={elementById.get(selectedRule.contentElementId)}
+          content={draftContent}
+          onContentChange={setDraftContent}
+          onChanged={updateRule}
+          onClose={closeEditor}
+        />
       ) : null}
 
       {canAct ? (

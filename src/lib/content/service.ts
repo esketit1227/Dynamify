@@ -16,10 +16,14 @@ export type ContentPageSummaryDTO = {
   // actually live, never a PENDING/DISABLED rule sitting unreviewed.
   personalizedElementCount: number;
   sectionCounts: { section: ContentSection; count: number }[];
-  // The page's first real HEADLINE element by crawl order, or null if it
-  // has none — never fabricated, and never any other element type standing
-  // in for a headline.
+  // The page's first real HEADLINE/SUBHEADLINE/CTA_LABEL element by crawl
+  // order, or null if it has none of that type — never fabricated, and
+  // never any other element type standing in for one. Together these are
+  // the real, default (unpersonalized — the grid has no visitor context to
+  // resolve against) content the card's mini preview renders.
   headline: string | null;
+  subheadline: string | null;
+  ctaLabel: string | null;
 };
 
 // Every crawled page across the org's sites, for the visual /content grid —
@@ -27,10 +31,11 @@ export type ContentPageSummaryDTO = {
 // (src/lib/recommendations/convertingPages.ts) and getOverviewStats. Four
 // lean, indexed-on-organizationId queries run in parallel rather than one
 // findMany({ include: { elements: true } }), which would pull every
-// element's full text org-wide just to compute counts and one snippet —
-// real, avoidable cost at scale.
+// element's full text org-wide just to compute counts and a few snippets —
+// real, avoidable cost at scale. The snippet query is bounded to exactly
+// the three types the card preview renders, never every element.
 export async function listContentPages(organizationId: string): Promise<ContentPageSummaryDTO[]> {
-  const [pages, sectionGroups, personalizedGroups, headlineElements] = await Promise.all([
+  const [pages, sectionGroups, personalizedGroups, previewElements] = await Promise.all([
     prisma.crawledPage.findMany({
       where: { organizationId },
       select: {
@@ -54,8 +59,8 @@ export async function listContentPages(organizationId: string): Promise<ContentP
       _count: { _all: true },
     }),
     prisma.contentElement.findMany({
-      where: { organizationId, elementType: "HEADLINE" },
-      select: { crawledPageId: true, currentContent: true },
+      where: { organizationId, elementType: { in: ["HEADLINE", "SUBHEADLINE", "CTA_LABEL"] } },
+      select: { crawledPageId: true, elementType: true, currentContent: true },
       orderBy: { order: "asc" },
     }),
   ]);
@@ -71,11 +76,16 @@ export async function listContentPages(organizationId: string): Promise<ContentP
 
   const personalizedByPage = new Map(personalizedGroups.map((g) => [g.crawledPageId, g._count._all]));
 
-  // First HEADLINE per page — headlineElements is ordered by `order` ASC,
-  // so the first write for a given page id is always the earliest one.
+  // First element of each type per page — previewElements is ordered by
+  // `order` ASC, so the first write for a given (page, type) pair is
+  // always the earliest one.
   const headlineByPage = new Map<string, string>();
-  for (const el of headlineElements) {
-    if (!headlineByPage.has(el.crawledPageId)) headlineByPage.set(el.crawledPageId, el.currentContent);
+  const subheadlineByPage = new Map<string, string>();
+  const ctaLabelByPage = new Map<string, string>();
+  const byType = { HEADLINE: headlineByPage, SUBHEADLINE: subheadlineByPage, CTA_LABEL: ctaLabelByPage };
+  for (const el of previewElements) {
+    const map = byType[el.elementType as keyof typeof byType];
+    if (map && !map.has(el.crawledPageId)) map.set(el.crawledPageId, el.currentContent);
   }
 
   return pages.map((page) => ({
@@ -88,6 +98,8 @@ export async function listContentPages(organizationId: string): Promise<ContentP
     personalizedElementCount: personalizedByPage.get(page.id) ?? 0,
     sectionCounts: sectionsByPage.get(page.id) ?? [],
     headline: headlineByPage.get(page.id) ?? null,
+    subheadline: subheadlineByPage.get(page.id) ?? null,
+    ctaLabel: ctaLabelByPage.get(page.id) ?? null,
   }));
 }
 

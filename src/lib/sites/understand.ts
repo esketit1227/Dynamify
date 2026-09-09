@@ -41,6 +41,16 @@ function truncated(maxLen: number) {
   return z.string().transform((value) => (value.length > maxLen ? `${value.slice(0, maxLen - 3)}...` : value));
 }
 
+// Same principle, applied to array length instead of string length —
+// independently reproduced against fluencify.io: brandTone.vocabulary
+// came back with 11 items against a hard .max(10), rejecting an otherwise
+// perfectly good response. Free-text arrays (tone/vocabulary/valueProps)
+// lose nothing meaningful by keeping only the first N; unlike pages/
+// classifiedElements below, there's no id to preserve a specific entry for.
+function truncatedArray<T extends z.ZodTypeAny>(item: T, maxItems: number) {
+  return z.array(item).transform((arr) => arr.slice(0, maxItems));
+}
+
 // Exported for direct schema unit tests (tests/unit/sites/understand.test.ts)
 // — the truncate-not-reject behavior is the load-bearing part of this fix,
 // worth testing without a real Anthropic call.
@@ -49,11 +59,11 @@ export const understandingSchema = z.object({
   productSummary: truncated(1000),
   targetCustomers: truncated(1000),
   brandTone: z.object({
-    tone: z.array(truncated(50)).max(10),
-    vocabulary: z.array(truncated(50)).max(10),
+    tone: truncatedArray(truncated(50), 10),
+    vocabulary: truncatedArray(truncated(50), 10),
     formality: truncated(50),
   }),
-  valueProps: z.array(truncated(300)).max(10),
+  valueProps: truncatedArray(truncated(300), 10),
   primaryCta: truncated(100).nullable(),
   pages: z
     .array(
