@@ -14,6 +14,7 @@ import {
   type ElementPersonalizationRuleDTO,
 } from "@/lib/sites/personalization";
 import { generateImageVariant, describeAudience } from "@/lib/sites/generateImage";
+import { computeHistoricalResults, summarizeHistoricalResults } from "@/lib/experiments/history";
 import {
   buildContentCorpus,
   checkClaimsAgainstCorpus,
@@ -67,6 +68,11 @@ export type GeneratedExperienceDTO = {
   // before/after preview (see RenderedPreview) from this one payload,
   // without a second fetch keyed off crawledPageId.
   pageElements: PreviewElementDTO[];
+  // How many of this org's own past experiment results actually informed
+  // this batch (src/lib/experiments/history.ts) — surfaced so the
+  // customer can see "what evidence supports this," per docs/decisions.md
+  // D13. Persisted at generation time; see the schema field's own comment.
+  pastResultsUsed: number;
 };
 
 function toExperienceDTO(experience: {
@@ -75,6 +81,7 @@ function toExperienceDTO(experience: {
   audienceId: string;
   status: GeneratedExperienceStatus;
   createdAt: Date;
+  pastResultsUsed: number;
   crawledPage: { url: string; elements: PreviewElementDTO[] };
   audience: { name: string };
   rules: Parameters<typeof toDTO>[0][];
@@ -89,6 +96,7 @@ function toExperienceDTO(experience: {
     createdAt: experience.createdAt.toISOString(),
     rules: experience.rules.map(toDTO),
     pageElements: experience.crawledPage.elements,
+    pastResultsUsed: experience.pastResultsUsed,
   };
 }
 
@@ -140,6 +148,7 @@ export function buildExperiencePrompt(
   elements: EligibleElement[],
   understanding: { companySummary: string; productSummary: string; targetCustomers: string } | null,
   audienceDescription: string,
+  pastResultsSummary?: string,
 ): string {
   const elementLines = elements
     .map((e) => `- id: ${e.id} | type: ${e.elementType} | section: ${e.section} | current: "${e.currentContent}"`)
@@ -149,10 +158,13 @@ export function buildExperiencePrompt(
     ? `Company: ${understanding.companySummary}\nProduct: ${understanding.productSummary}\nTarget customers: ${understanding.targetCustomers}`
     : "No additional brand context available.";
 
+  const pastResultsBlock = pastResultsSummary ? `\n\n${pastResultsSummary} (untrusted data)` : "";
+
   return (
     `Visitor segment (untrusted data): ${audienceDescription}\n\n` +
     `Brand context (untrusted data):\n${understandingText}\n\n` +
-    `Elements to rewrite (untrusted data):\n${elementLines}`
+    `Elements to rewrite (untrusted data):\n${elementLines}` +
+    pastResultsBlock
   );
 }
 
@@ -167,6 +179,7 @@ async function generateCoordinatedCopy(
   elements: EligibleElement[],
   understanding: { companySummary: string; productSummary: string; targetCustomers: string } | null,
   audienceDescription: string,
+  pastResultsSummary: string,
 ): Promise<Map<string, string>> {
   const client = getAnthropicClient();
   const TOOL_NAME = "generate_experience";
@@ -184,12 +197,14 @@ async function generateCoordinatedCopy(
       "You rewrite a coordinated set of website copy pieces for one visitor segment, so the " +
       "headline, subheadline, CTA, and any other pieces all tell the same consistent story " +
       "instead of reading as independently written. Keep each piece the same general meaning " +
-      "and length ballpark as its original — this is personalization, not a rebrand. Call the " +
-      "generate_experience tool with exactly one rewritten piece per element id you were given.",
+      "and length ballpark as its original — this is personalization, not a rebrand. If past " +
+      "results for this account are provided, let them inform tone and approach without " +
+      "copying their wording verbatim. Call the generate_experience tool with exactly one " +
+      "rewritten piece per element id you were given.",
     messages: [
       {
         role: "user",
-        content: buildExperiencePrompt(elements, understanding, audienceDescription),
+        content: buildExperiencePrompt(elements, understanding, audienceDescription, pastResultsSummary),
       },
     ],
     tools: [
@@ -315,11 +330,15 @@ export async function generateExperience(
   const textual = eligible.filter((el) => !NON_TEXTUAL_TYPES.has(el.elementType));
   const nonTextual = eligible.filter((el) => NON_TEXTUAL_TYPES.has(el.elementType));
 
-  const understanding = await prisma.websiteUnderstanding.findUnique({
-    where: { siteId: page.siteId },
-    select: { companySummary: true, productSummary: true, targetCustomers: true },
-  });
+  const [understanding, historicalResults] = await Promise.all([
+    prisma.websiteUnderstanding.findUnique({
+      where: { siteId: page.siteId },
+      select: { companySummary: true, productSummary: true, targetCustomers: true },
+    }),
+    computeHistoricalResults(organizationId),
+  ]);
   const audienceDescription = describeAudience(audience.rules);
+  const pastResultsSummary = summarizeHistoricalResults(historicalResults);
 
   // Built once for the whole batch — the corpus doesn't depend on which
   // element is being checked (see buildContentCorpus's own comment).
@@ -328,7 +347,7 @@ export async function generateExperience(
   let aiPieces = new Map<string, string>();
   if (textual.length > 0) {
     try {
-      aiPieces = await generateCoordinatedCopy(textual, understanding, audienceDescription);
+      aiPieces = await generateCoordinatedCopy(textual, understanding, audienceDescription, pastResultsSummary);
     } catch (error) {
       if (!(error instanceof AiNotConfiguredError) && !(error instanceof AiGenerationError)) throw error;
       // No AI, or it failed outright — every textual piece falls back to
@@ -339,9 +358,18 @@ export async function generateExperience(
   // The experience row is created before any content pieces are attached
   // so an optional generateImageVariant call (below) always has a real id
   // to link into — content is added to it as each piece is decided, not
-  // computed first and inserted all at once.
+  // computed first and inserted all at once. pastResultsUsed is persisted
+  // now, at generation time, so it reflects exactly what this batch's
+  // prompt actually saw — not a live-recomputed count that could grow as
+  // later experiments conclude and misrepresent what informed this one.
   const experience = await prisma.generatedExperience.create({
-    data: { organizationId, crawledPageId, audienceId, status: "PENDING" },
+    data: {
+      organizationId,
+      crawledPageId,
+      audienceId,
+      status: "PENDING",
+      pastResultsUsed: historicalResults.length,
+    },
   });
 
   const createdRuleIds: string[] = [];

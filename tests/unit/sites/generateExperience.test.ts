@@ -91,4 +91,16 @@ describe("buildExperiencePrompt", () => {
     const prompt = buildExperiencePrompt(elements, null, "a general visitor");
     expect(prompt).toContain("No additional brand context available.");
   });
+
+  it("includes the past-results summary when provided", () => {
+    const prompt = buildExperiencePrompt(elements, null, "a general visitor", "Past results in this account: ...");
+    expect(prompt).toContain("Past results in this account: ...");
+  });
+
+  it("omits any past-results block when the summary is undefined or empty", () => {
+    const withUndefined = buildExperiencePrompt(elements, null, "a general visitor");
+    const withEmpty = buildExperiencePrompt(elements, null, "a general visitor", "");
+    expect(withUndefined).not.toContain("Past results");
+    expect(withEmpty).not.toContain("Past results");
+  });
 });

@@ -11,6 +11,7 @@ import {
 } from "@/lib/sites/generateExperience";
 import { CrawledPageNotFoundError } from "@/lib/liveview/service";
 import { AudienceNotFoundError, disableElementPersonalizationRule } from "@/lib/sites/personalization";
+import { MAX_ARM_WEIGHT } from "@/lib/experiments/banditStats";
 import { resetDb } from "../setup/reset";
 import { createOrgWithUser } from "../setup/factories";
 import type { ContentElementType, PersonalizationBoundary } from "@/generated/prisma/client";
@@ -264,5 +265,71 @@ describe("generated experience review actions", () => {
 
     const stillThere = await prisma.generatedExperience.findUnique({ where: { id: experience.id } });
     expect(stillThere).not.toBeNull();
+  });
+});
+
+// docs/decisions.md D13: pastResultsUsed is persisted at generation time,
+// reflecting exactly what this batch's prompt saw — not a live-recomputed
+// count that could grow later and misrepresent what informed this one.
+describe("generateExperience — pastResultsUsed", () => {
+  it("is 0 when the org has no converged past experiment", async () => {
+    const { organization } = await createOrgWithUser();
+    const { page, audience } = await seedPage(organization.id, [
+      { elementType: "HEADLINE", currentContent: "Welcome to Acme" },
+      { elementType: "HEADLINE", currentContent: "Acme helps teams ship faster" },
+    ]);
+
+    const experience = await generateExperience(organization.id, page.id, audience.id);
+
+    expect(experience.pastResultsUsed).toBe(0);
+    const stored = await prisma.generatedExperience.findUniqueOrThrow({ where: { id: experience.id } });
+    expect(stored.pastResultsUsed).toBe(0);
+  });
+
+  it("reflects a real converged past experiment elsewhere in the same org", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site, page: pastPage, audience: pastAudience } = await seedPage(organization.id, [
+      { elementType: "HEADLINE", currentContent: "Old headline" },
+    ]);
+    const pastElement = await prisma.contentElement.findFirstOrThrow({ where: { crawledPageId: pastPage.id } });
+    const variantA = await prisma.elementVariant.create({
+      data: { organizationId: organization.id, contentElementId: pastElement.id, content: "Winning headline", method: "MANUAL" },
+    });
+    const variantB = await prisma.elementVariant.create({
+      data: { organizationId: organization.id, contentElementId: pastElement.id, content: "Losing headline", method: "MANUAL" },
+    });
+    const ruleA = await prisma.elementPersonalizationRule.create({
+      data: { organizationId: organization.id, contentElementId: pastElement.id, audienceId: pastAudience.id, elementVariantId: variantA.id, priority: 0, status: "APPROVED" },
+    });
+    const ruleB = await prisma.elementPersonalizationRule.create({
+      data: { organizationId: organization.id, contentElementId: pastElement.id, audienceId: pastAudience.id, elementVariantId: variantB.id, priority: 0, status: "APPROVED" },
+    });
+    await prisma.banditExperiment.create({
+      data: { organizationId: organization.id, contentElementId: pastElement.id, audienceId: pastAudience.id, ruleAId: ruleA.id, ruleBId: ruleB.id, weightA: MAX_ARM_WEIGHT },
+    });
+    const visitorA = await prisma.siteVisitor.create({ data: { organizationId: organization.id, siteId: site.id, visitorKey: "a-1" } });
+    const sessionA = await prisma.visitorSession.create({ data: { organizationId: organization.id, visitorId: visitorA.id } });
+    await prisma.impression.create({
+      data: { organizationId: organization.id, sessionId: sessionA.id, crawledPageId: pastPage.id, audienceId: pastAudience.id, ruleId: ruleA.id, elementVariantId: variantA.id },
+    });
+    const visitorB = await prisma.siteVisitor.create({ data: { organizationId: organization.id, siteId: site.id, visitorKey: "b-1" } });
+    const sessionB = await prisma.visitorSession.create({ data: { organizationId: organization.id, visitorId: visitorB.id } });
+    await prisma.impression.create({
+      data: { organizationId: organization.id, sessionId: sessionB.id, crawledPageId: pastPage.id, audienceId: pastAudience.id, ruleId: ruleB.id, elementVariantId: variantB.id },
+    });
+
+    // A fresh page in the same org — the point is that history is read
+    // org-wide, not scoped to the page/audience being generated for now.
+    // Two HEADLINE elements so heuristic reselection has a real candidate
+    // (same pattern as this file's very first test) — no AI key exists in
+    // this test environment, so every generation here falls back to it.
+    const { page: newPage, audience: newAudience } = await seedPage(organization.id, [
+      { elementType: "HEADLINE", currentContent: "Brand new page headline" },
+      { elementType: "HEADLINE", currentContent: "A second headline on the new page" },
+    ]);
+
+    const experience = await generateExperience(organization.id, newPage.id, newAudience.id);
+
+    expect(experience.pastResultsUsed).toBe(1);
   });
 });

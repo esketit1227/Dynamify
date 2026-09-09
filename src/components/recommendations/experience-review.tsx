@@ -335,6 +335,12 @@ export function ExperienceReview({
         {pendingCount > 0 ? <Badge variant="neutral">{pendingCount} pending</Badge> : null}
         {approvedCount > 0 ? <Badge variant="positive">{approvedCount} live</Badge> : null}
       </div>
+      {experience.pastResultsUsed > 0 ? (
+        <p className="mt-1.5 text-xs text-muted">
+          Informed by {experience.pastResultsUsed} past result{experience.pastResultsUsed === 1 ? "" : "s"} in your
+          account
+        </p>
+      ) : null}
 
       <div className="mt-3 inline-flex gap-1 rounded-lg border border-border bg-surface p-1">
         <button

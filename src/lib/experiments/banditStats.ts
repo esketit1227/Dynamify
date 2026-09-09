@@ -61,9 +61,12 @@ export const MIN_BANDIT_SAMPLE = 30;
 // Never fully starve the "losing" arm — keep collecting real data on it
 // too (it may recover, and a human still has to act to end the
 // experiment; this isn't a system that quietly finalizes a winner on its
-// own), and never treat a leading arm as a certainty.
-const MIN_ARM_WEIGHT = 0.1;
-const MAX_ARM_WEIGHT = 0.9;
+// own), and never treat a leading arm as a certainty. Exported: a
+// weightA at either cap is also the bandit's own "this arm has clearly
+// won" signal, reused as-is by src/lib/experiments/history.ts rather
+// than re-deriving a second notion of "won" from raw trial/success counts.
+export const MIN_ARM_WEIGHT = 0.1;
+export const MAX_ARM_WEIGHT = 0.9;
 const THOMPSON_SAMPLES = 5000;
 
 // Marsaglia-Tsang method, standard and simple — no dependency needed for

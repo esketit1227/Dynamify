@@ -711,6 +711,61 @@ lint && pnpm test (530 passing, 14 new) && pnpm build` all clean.
 
 ---
 
+## D13. Reconciling the user-provided "AI Optimization Engine Architecture" doc against what's already decided/built — decided 2026-09-09
+
+The user pasted a full architecture document (audiences → hypothesis →
+approval → experiment → measure → learn → repeat; AI provider abstraction;
+risk levels; autonomy modes; never-publish-without-approval). Read against
+`docs/product-spec.md`, this file, and the actual `src/lib/` tree rather
+than assumed: almost all of it is already the shipped architecture, not a
+pivot — D1's client-side embed script (mistakenly reported the day before
+as "not started," see the 2026-09-09 correction on Phase 2 above), D2/D3's
+fingerprint re-verification, D4's brand-safety double-check, and D11's
+bandit-based control/variation measurement all predate this document and
+already satisfy most of it.
+
+**Two real tensions surfaced, put to the user directly rather than
+resolved silently:**
+
+1. **Experiment model: the new document describes classic A/B semantics**
+   (discrete states RUNNING → COMPLETED → WINNER/LOSER/INCONCLUSIVE, a
+   stated confidence percentage, an experiment that *ends*) — materially
+   different from D11's continuous multi-armed bandit, which never
+   "completes" and never states a frequentist confidence number, decided
+   at the user's own explicit direction the day before. **Decided: keep
+   D11's bandit-only model.** The new document's COMPLETED/WINNER/
+   confidence language should be read as descriptive of the bandit's own
+   converged state (e.g. `weightA` settled near its cap) when explaining
+   results to a customer, not as a second, literal fixed-duration
+   experiment type to build alongside it.
+
+2. **"Learning from history" scope.** The document's flywheel (Section 8/
+   17-18: recognize which past changes worked, use that history in future
+   recommendations) does not exist anywhere in `src/lib/recommendations/`
+   today — recommendations are generated fresh every time, with zero
+   reference to prior `BanditExperiment` outcomes. Separately,
+   `docs/autonomy.md` already describes a *much* bigger version of this
+   same idea — cross-merchant pooled priors, "the moat" — which is
+   real cross-tenant aggregation (structural patterns only, never
+   content, but still a departure from this codebase's absolute
+   per-`organizationId` isolation posture) and deserved its own explicit
+   check rather than being bundled in by default. **Decided: within-org
+   only for this build.** A given org's own recommendation generation may
+   use that same org's own past `BanditExperiment` results (by audience,
+   by section/elementType) — no data from any other organization, ever.
+   `docs/autonomy.md`'s cross-merchant pooled-priors moat remains a real,
+   separate, bigger idea, explicitly not decided against, just not this
+   build — revisit as its own decision if it comes up again.
+
+**Deferred, not decided against, just not this build:** risk levels
+(LOW/MEDIUM/HIGH classification per proposed change — Section 12 of the
+new document) and an `AIProvider` abstraction (`src/lib/ai/client.ts` calls
+the Anthropic SDK directly today — Section 9) are both real, small-to-
+medium gaps against the new document. Neither conflicts with anything
+shipped; both are additive whenever actually prioritized.
+
+---
+
 ### Superseded (old hosted-page architecture — 2026-08-26, no longer applicable)
 
 The prior D1–D6 (personalization resolution location, flash of default

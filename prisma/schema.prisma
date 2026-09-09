@@ -486,7 +486,7 @@ model Domain {
 // Generic outgoing webhook — deliberately not a specific third-party
 // connector (CRM name, etc.); see docs/roadmap.md Phase 6.
 model WebhookSubscription {
-  id             String      @id @default(cuid())
+  id             String          @id @default(cuid())
   organizationId String
   url            String
   // Reuses SiteEventType (defined below, with SiteEvent) rather than the
@@ -496,9 +496,9 @@ model WebhookSubscription {
   // needs to speak that pipeline's actual taxonomy, not the retired one.
   eventTypes     SiteEventType[]
   signingSecret  String
-  active         Boolean     @default(true)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -782,12 +782,18 @@ enum GeneratedExperienceStatus {
 // statuses (see setGeneratedExperienceStatus), not independently
 // authoritative.
 model GeneratedExperience {
-  id             String                    @id @default(cuid())
-  organizationId String
-  crawledPageId  String
-  audienceId     String
-  status         GeneratedExperienceStatus @default(PENDING)
-  createdAt      DateTime                  @default(now())
+  id              String                    @id @default(cuid())
+  organizationId  String
+  crawledPageId   String
+  audienceId      String
+  status          GeneratedExperienceStatus @default(PENDING)
+  // How many past-experiment results (src/lib/experiments/history.ts)
+  // actually informed this batch's generation prompt, persisted at
+  // creation time rather than recomputed live — a live count could grow
+  // as later experiments conclude, misrepresenting what this specific
+  // generation actually saw.
+  pastResultsUsed Int                       @default(0)
+  createdAt       DateTime                  @default(now())
 
   crawledPage CrawledPage                  @relation(fields: [crawledPageId], references: [id], onDelete: Cascade)
   audience    Audience                     @relation(fields: [audienceId], references: [id], onDelete: Cascade)

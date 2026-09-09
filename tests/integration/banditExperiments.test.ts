@@ -12,7 +12,8 @@ import {
   BanditExperimentNotFoundError,
   DuplicateBanditExperimentError,
 } from "@/lib/experiments/bandit";
-import { MIN_BANDIT_SAMPLE } from "@/lib/experiments/banditStats";
+import { MIN_BANDIT_SAMPLE, MAX_ARM_WEIGHT } from "@/lib/experiments/banditStats";
+import { computeHistoricalResults } from "@/lib/experiments/history";
 import { resetDb } from "../setup/reset";
 import { createOrgWithUser } from "../setup/factories";
 
@@ -463,5 +464,76 @@ describe("stopBanditExperiment", () => {
     const experiment = await createBanditExperiment(orgA.id, element.id, { audienceId: audience.id, ruleAId: ruleA.id, ruleBId: ruleB.id });
 
     await expect(stopBanditExperiment(orgB.id, experiment.id)).rejects.toThrow(BanditExperimentNotFoundError);
+  });
+});
+
+// docs/decisions.md D13: recommendations should factor in this org's own
+// past bandit results. weightA at the cap is already the bandit's own
+// "this arm clearly won" signal (banditStats.ts) — reused directly rather
+// than a second, competing notion of significance.
+describe("computeHistoricalResults", () => {
+  it("surfaces a converged experiment, with the correct winner/loser and real rates", async () => {
+    const { organization } = await createOrgWithUser();
+    const { site, page, element } = await seedTrackedSite(organization.id);
+    const { audience, ruleA, ruleB, variantA, variantB } = await seedTwoArmRules(
+      organization.id,
+      element.id,
+      "Winning headline",
+      "Losing headline",
+    );
+    await prisma.banditExperiment.create({
+      data: {
+        organizationId: organization.id,
+        contentElementId: element.id,
+        audienceId: audience.id,
+        ruleAId: ruleA.id,
+        ruleBId: ruleB.id,
+        weightA: MAX_ARM_WEIGHT,
+      },
+    });
+    for (let i = 0; i < 6; i++) {
+      await seedTrial(organization.id, site.id, page.id, audience.id, ruleA.id, variantA.id, `a-${i}`, i < 3);
+    }
+    for (let i = 0; i < 6; i++) {
+      await seedTrial(organization.id, site.id, page.id, audience.id, ruleB.id, variantB.id, `b-${i}`, i < 1);
+    }
+
+    const results = await computeHistoricalResults(organization.id);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      section: "HERO",
+      elementType: "HEADLINE",
+      audienceName: "Mobile visitors",
+      winningContent: "Winning headline",
+      losingContent: "Losing headline",
+      winningRate: 0.5,
+      losingRate: 1 / 6,
+    });
+  });
+
+  it("excludes an experiment that hasn't converged (weightA still near 0.5)", async () => {
+    const { organization } = await createOrgWithUser();
+    const { element } = await seedTrackedSite(organization.id);
+    const { audience, ruleA, ruleB } = await seedTwoArmRules(organization.id, element.id, "A", "B");
+    await prisma.banditExperiment.create({
+      data: { organizationId: organization.id, contentElementId: element.id, audienceId: audience.id, ruleAId: ruleA.id, ruleBId: ruleB.id, weightA: 0.5 },
+    });
+
+    expect(await computeHistoricalResults(organization.id)).toEqual([]);
+  });
+
+  it("never surfaces another organization's experiment", async () => {
+    const { organization: orgA } = await createOrgWithUser();
+    const { organization: orgB } = await createOrgWithUser();
+    const { site, page, element } = await seedTrackedSite(orgB.id);
+    const { audience, ruleA, ruleB, variantA, variantB } = await seedTwoArmRules(orgB.id, element.id, "A", "B");
+    await prisma.banditExperiment.create({
+      data: { organizationId: orgB.id, contentElementId: element.id, audienceId: audience.id, ruleAId: ruleA.id, ruleBId: ruleB.id, weightA: MAX_ARM_WEIGHT },
+    });
+    await seedTrial(orgB.id, site.id, page.id, audience.id, ruleA.id, variantA.id, "a-1", true);
+    await seedTrial(orgB.id, site.id, page.id, audience.id, ruleB.id, variantB.id, "b-1", false);
+
+    expect(await computeHistoricalResults(orgA.id)).toEqual([]);
   });
 });

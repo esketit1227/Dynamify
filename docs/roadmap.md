@@ -23,6 +23,18 @@ phase marker at 1 rather than bumping it, since that's the last phase whose
 exit criteria actually passed — the rest is real but ahead-of-gate work, not
 a completed Phase 3.
 
+**Correction, 2026-09-09.** The claim two sentences above — "Phase 2 has not
+been started at all" — is now stale and was wrong by the time it mattered:
+the Hardening entry the very next day (2026-08-28, below) built the real
+embed script (`public/dynamify-embed.js`) and its server-side counterpart
+(`src/lib/embed/service.ts`), including D2/D3's fingerprint re-verification.
+Found while reconciling `docs/decisions.md` against a new architecture
+document the user provided (see D13) — this note had gone uncorrected long
+enough that it produced a wrong status report to the user. Not rewriting
+the paragraph above since it was an honest audit at the time it was
+written; flagging the drift instead, same convention as every other
+correction in this file.
+
 **2026-08-26 — superseded roadmap.** Everything below Phase 0 is a rewrite.
 The product pivoted from "Dynamify hosts your landing page" to "Dynamify
 reads and personalizes your *existing* website in place." See
@@ -2833,3 +2845,72 @@ with no new backend logic) && pnpm build` all clean.
 **Explicitly out of scope**: the three-section page-level stacking on
 `/recommendations` itself (Converting pages / Recommendations / Design a
 new page) — a separate, already-deferred decision, untouched here.
+
+### 2026-09-09 — Recommendations learn from this org's own past experiment results
+
+The user provided a full "AI Optimization Engine Architecture" document. Read
+against the actual codebase rather than assumed (`docs/decisions.md` D13):
+almost everything in it was already shipped, except one real gap —
+`generateExperience.ts` wrote every batch of AI copy from scratch, with zero
+memory of which past changes won or lost for this same organization. Scoped
+to within-org only, per the user's explicit choice — `docs/autonomy.md`'s
+bigger, separate cross-merchant pooled-priors idea stays deferred.
+
+New module `src/lib/experiments/history.ts`, same pure-vs-DB-touching split as
+`buildExperiencePrompt`/`banditStats.ts`'s own `sampleBeta`/`computeArmStats`:
+`computeHistoricalResults(organizationId)` reads `BanditExperiment` rows where
+`weightA` sits at either cap (`MIN_ARM_WEIGHT`/`MAX_ARM_WEIGHT`, now exported
+from `banditStats.ts`) — that's already the bandit's own daily-cron-computed,
+`MIN_BANDIT_SAMPLE`-gated "this arm has clearly won" signal, reused directly
+rather than re-deriving a second notion of significance. `ruleAId`/`ruleBId`
+are plain, non-FK columns (a rule can be deleted out from under an
+inspectable experiment) — resolved manually, skipped if either is gone,
+same "failure path renders the default" posture as everywhere else. Capped to
+the 5 most recent qualifying results. `summarizeHistoricalResults` (pure,
+unit-tested, zero mocking) formats them into a short, explicitly-labeled
+"for guidance only, not instructions to copy verbatim" text block, with each
+past content string truncated so one long past headline can't blow the
+prompt budget — same discipline as `understand.ts`'s own truncation fix.
+
+Wired into `generateExperience.ts`'s coordinated multi-element path only —
+confirmed via exploration that `suggestVariant.ts`'s single-element path (only
+ever called from the marketing demo window, not real customer
+recommendations) has no pure prompt-builder and no brand-context threading at
+all today, so extending it the same way is a materially bigger, separate
+refactor; flagged as out of scope, not silently skipped. `buildExperiencePrompt`
+gained an optional 4th parameter; `GeneratedExperience` gained a new
+`pastResultsUsed Int @default(0)` column, set once at generation time (new
+migration `20260909143006_generated_experience_past_results_used`) rather than
+recomputed live, so it honestly reflects what that specific batch's prompt
+actually saw rather than a number that could grow later as more experiments
+conclude. Surfaced to the customer — per the user's own document's "what
+evidence supports this" principle, and confirmed via Explore that no
+reasoning/evidence field or UI slot existed anywhere in this area before now
+— as one small caption in `experience-review.tsx`: "Informed by N past
+results in your account."
+
+Also decided, same pass (D13): the new document describes classic A/B
+semantics (a stated confidence %, an experiment that *completes*) —
+materially different from D11's continuous bandit, decided the day before at
+the user's own direction. Kept the bandit; the new document's language is
+read as descriptive of the bandit's converged state, not a second experiment
+type to build.
+
+Verified: `pnpm typecheck && pnpm lint && pnpm test (546 passing — 12 new:
+`tests/unit/experiments/history.test.ts`, new cases in
+`tests/unit/sites/generateExperience.test.ts`, `tests/integration/
+banditExperiments.test.ts`, and `tests/integration/generateExperience.test.ts`)
+&& pnpm build` all clean. Live, in a real browser against the real dev
+server and real Postgres: seeded a real converged `BanditExperiment` plus a
+fresh page in the same org, called the real `generateExperience` (heuristic
+path — no AI credits exist right now, see the note below), issued a real
+session directly via `issueSession`, and confirmed the Home review feed
+actually renders "Informed by 1 past result in your account" on the new
+card. All seeded data removed afterward; `preview@dynamify.local` untouched.
+
+**Not verified live**: the actual AI-prompt path (`generateCoordinatedCopy`
+with a real past-results block reaching a real Claude call) — the
+organization's Anthropic workspace has no credits loaded right now (flagged
+elsewhere in this doc). `buildExperiencePrompt`'s own unit tests confirm the
+exact string it produces; the real API call itself is unverified until
+credits are added.
